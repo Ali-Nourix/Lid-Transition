@@ -6,7 +6,7 @@
 dotnet test tests\LidFlow.Core.Tests\LidFlow.Core.Tests.csproj
 ```
 
-**127 tests, green.** They run on any OS — no GPU, no display, no lid — because
+**150 tests, green.** They run on any OS — no GPU, no display, no lid — because
 everything worth asserting lives in the platform-neutral `LidFlow.Core`. CI runs
 them on `windows-latest` as part of `BUILD-WINDOWS.ps1`.
 
@@ -19,8 +19,10 @@ them on `windows-latest` as part of `BUILD-WINDOWS.ps1`.
 | **Reversal** | Progress inversion round-trips within 0.02 in both directions, and an open animation resumed at a matched time shows the same aperture as the close animation it replaced — the property that makes a mid-flight reversal continuous rather than a jump. |
 | **Fuzz** | 400 random configurations × both directions × 17 samples, asserting every one of ~20 output parameters is finite. This is the guard against a hand-edited `config.json` producing NaN, which on the GPU shows as a garbage frame rather than an error. |
 | **State machine** | Both happy paths. Capture failure on close skips the animation; on open it *drops* the overlay rather than leaving the user staring at black. Reversal from mid-animation in both directions, carrying the on-screen panel position. 50 rounds of rapid toggling never strand the overlay or stack animations. Suspend mid-close leaves it black; suspend while idle leaves it down. A resume alone does not assume the lid opened. `Abort` from all six live states returns to idle with the overlay down. Disable/enable from any state. Unknown triggers are ignored. `NaN` progress is treated as zero. |
-| **Hinge angle** | Closed/open clamping. Monotonic over 0–120°. The mapping follows `sin(angle)`, not the angle — asserted by checking the mid-angle maps to ~29% closed, not 50%. Inverted config ranges tolerated. Non-finite inputs never produce non-finite output. Velocity saturates and ignores direction. Derived lid state uses hysteresis so sensor noise cannot flip it. |
-| **Hinge-driven rendering** | Timed and angle-driven paths produce *identical* geometry at the same panel position, so the two input modes cannot look like different effects. A stationary lid has exactly zero motion blur while the aperture stays put. |
+| **Hinge angle** | Closed/open clamping. Monotonic over 0–120°. The mapping is linear in the angle, because the trigonometry belongs in the projection and curving it twice would make the image lag the panel. Inverted config ranges tolerated. Non-finite inputs never produce non-finite output. Velocity saturates and ignores direction. Derived lid state uses hysteresis so sensor noise cannot flip it. |
+| **Lid angle tracker** | Starts uncalibrated and reports nothing. Learns the pitch range from the switch's two events. Reports position continuously in between, clamped past either end. Works whichever way round the sensor is mounted — asserted by running an inverted pair and requiring the same answer. Motion direction distinguishes closing from opening. A stationary lid reports no motion and near-zero rate (load-bearing: a lid held part-way must be sharp). The progress rate is positive while closing on either mounting. Implausibly small (0/5/19°) and large (300°) sweeps are rejected rather than used. The open reference follows the angle the user works at, and is *not* sampled while the lid is still moving. Non-finite readings ignored. Calibration round-trips through configuration, and a persisted range with an implausible sweep is invalidated on load. |
+| **Angle-driven rendering** | Timed and angle-driven paths produce *identical* geometry at the same panel position, so the input modes cannot look like different effects. A stationary lid has exactly zero motion blur while the panel stays put. |
+| **Panel projection** | The first frame of a close is the identity projection with every optical term zero — verified to 6×10⁻⁸ over a 41×41 grid, which is what makes it pixel-identical to the desktop. The last frame is edge-on with zero coverage. Coverage shrinks monotonically over 300 samples. The hinge row does not move while every row above it does, further ones further — so black grows from the *top*. The projection keystones monotonically, so the outline is a clean trapezoid. With `perspectiveStrength` at 0 there is no keystone but still foreshortening, proving the keystone comes from the projection. Blur is zero at the hinge and rises monotonically to the far edge. The hinge row is neither blurred nor dimmed at *any* progress — if that ever failed the effect would read as a global fade. |
 | **Lid parsing** | Only the documented `0`/`1` are accepted; every other value and every wrong payload length is `Unknown`. Duplicate states are suppressed — load-bearing, because a repeated "closed" mid-animation would otherwise restart the transition. |
 | **Monitor selection** | Internal panel wins over an external primary. Highest confidence wins. A single unidentified display is used but flagged as a guess. Several unidentified displays fall back to primary and say so. `AllDisplays` and `PrimaryDisplay` honour the external opt-in. Manual matches by device path or device name. A missing manual target falls back and reports why. Empty-bounds displays (the internal panel while docked) are never selected. |
 | **Configuration** | Defaults land inside the brief's envelopes (close 250–420 ms, open 220–380 ms, open faster than close) and are safe (internal panel only, no debug HUD, no auto-start). Hostile values are clamped. Null sections are replaced. JSON round-trips. Enums serialize as readable names. Missing files, malformed files, partial configs, comments and trailing commas all handled. Saving is atomic and leaves no `.tmp`. `Clone` is deep. |
@@ -140,15 +142,20 @@ refresh rate, lid-close action, and whether sign-in on wake is required.
 | 59 | Capture latency in `--debug` | Small enough that the transition starts immediately. |
 | 60 | Input lag during a transition | None perceptible; the message pump stays serviced. |
 
-### If a hinge-angle sensor is present
+### If a hinge-angle sensor or lid inclinometer is present
 
 | # | Test | Expected |
 | --- | --- | --- |
-| 61 | `--debug` input mode | Reports "hinge angle sensor". |
-| 62 | Move the lid slowly | Aperture tracks the hinge one-to-one. |
-| 63 | Stop half way | Aperture holds position and is **sharp** — blur decays to nothing. |
-| 64 | Reverse direction mid-move | Follows the hinge with no jump. |
+| 61 | `--debug` input mode | Reports which tier is active: hinge sensor, lid inclinometer, or timed. |
+| 62 | Move the lid slowly | Panel tracks the lid one-to-one. |
+| 63 | Stop half way | Panel holds position and goes **sharp** — blur decays to nothing. |
+| 64 | Reverse direction mid-move | Follows the lid with no jump. |
 | 65 | Move fast | Blur scales with actual speed. |
+| 66 | On tier 2, first close/open cycle | Runs timed; `--debug` then shows a learned sweep. |
+| 67 | Restart after that | `--debug` shows the calibration already loaded, and tracking works from the first transition. |
+| 68 | Tilt the laptop without moving the lid | **No transition starts** (default settings). |
+| 69 | Re-open to a different angle and leave it | The learned sweep updates to match. |
+| 70 | Delete `inclinometerCalibration` from config.json | Re-learns on the next cycle. |
 
 ---
 

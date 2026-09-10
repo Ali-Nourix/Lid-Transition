@@ -53,19 +53,59 @@ Polling, WMI queries, timers, keyboard/mouse hooks and inferring lid state from
 display state were all rejected. The notification is pushed by the OS, costs
 nothing while idle, and is the only mechanism with no latency floor of its own.
 
-### The continuous-angle alternative
+### The continuous-angle problem, and two answers
 
-**FACT.** Windows also has `Windows.Devices.Sensors.HingeAngleSensor`, which
-reports a *continuous* hinge angle in degrees with a configurable report
-threshold. ([HingeAngleSensor][hinge-sensor])
+The lid switch is **strictly binary**. It reports `0` or `1` and there is no
+value in between, so on its own it can say *that* the lid moved but never *how
+far*. Everything about how good the effect can look follows from that, so both
+available ways around it were pursued.
 
-**INFERENCE.** In practice this sensor is present on dual-screen and foldable
-hardware rather than on ordinary clamshell laptops. Windows has no documented
-API that exposes a continuous lid angle for a conventional laptop lid; the lid
-switch is binary by design.
+**Answer 1 — a real hinge-angle sensor. FACT.**
+`Windows.Devices.Sensors.HingeAngleSensor` reports a continuous hinge angle in
+degrees with a configurable report threshold. ([HingeAngleSensor][hinge-sensor])
 
-This distinction turned out to be the single most important finding of the whole
-investigation, and section 10 returns to it.
+**INFERENCE.** In practice it is present on dual-screen and foldable hardware
+rather than on ordinary clamshell laptops. Windows has no documented API exposing
+a continuous lid angle for a conventional laptop lid.
+
+**Answer 2 — a lid-mounted inclinometer. FACT.**
+`Windows.Devices.Sensors.Inclinometer` reports fused pitch/roll/yaw in degrees,
+and `Accelerometer` exposes the raw gravity vector.
+([Inclinometer][inclinometer], [Accelerometer][accelerometer])
+
+**INFERENCE.** On any machine with auto-rotate or a tablet mode the sensor is
+mounted *in the display*, because that is what those features need. Its pitch
+therefore moves with the lid. That is far more common hardware than a hinge-angle
+sensor, so it covers many more machines.
+
+The catch is that an inclinometer is **relative**, not absolute: it reports
+orientation with respect to gravity, so it has no idea what "closed" means. But
+the lid switch does — and that is exactly what makes the pair work:
+
+- when the switch says **closed**, the current pitch is one end of the range;
+- while the lid sits **open and still**, the current pitch is the other end.
+
+Two observations and everything in between becomes readable. The sign falls out
+of the subtraction, so it does not matter which way round the sensor is mounted,
+and the open reference is re-sampled whenever the lid rests, so it follows the
+angle the user actually works at. The learned range is persisted, so only the
+very first close/open cycle on a machine runs on the timed path.
+
+**The deliberate limitation.** An inclinometer cannot distinguish a moving lid
+from a moving laptop: picking the machine up changes pitch just as closing the
+lid does. So by default it only supplies *position* for a transition the lid
+switch has already started — it never starts one. That makes a false positive
+impossible while still filling in the part that was missing. Letting it start a
+close early is available (`allowInclinometerEarlyClose`) and off by default,
+because the switch fires near the end of the lid's travel and starting from
+detected motion is the only way to give the close real runway — at the cost of
+that ambiguity.
+
+A range that is implausibly small (under 20°) or large (over 175°) is rejected
+rather than used, since it means the two observations were not of a real lid
+movement — most likely a sensor in the base rather than the lid.
+
+Section 10 returns to what this does and does not close.
 
 ---
 
@@ -493,24 +533,39 @@ at full close the aperture has zero height, so the last frame is pure black.
 
 Comparing the platforms produced a conclusion worth stating on its own.
 
-- Bendy reads a **continuous lid angle** from Apple silicon hardware, so its image
-  can track the hinge one-to-one. Stopping half way, moving slowly and reversing
-  all behave correctly for free, because the image is a read-out of the hardware
-  rather than an animation.
+- Bendy reads a **continuous lid angle** from a dedicated sensor Apple silicon
+  MacBooks expose, so its image tracks the hinge one-to-one. Stopping half way,
+  moving slowly and reversing all behave correctly for free, because the image is a
+  read-out of the hardware rather than an animation.
 - Windows gives an ordinary clamshell laptop a **binary** lid event, fired once at
-  a hardware threshold. There is no angle to track.
+  a hardware threshold. There is no angle in the event to track.
 
-This is a genuine fidelity gap and it is not closeable in software on hardware that
-has no sensor. It is also the reason several design decisions look the way they do:
-the animation is timed, the easing curves matter a great deal, the duration must be
-short, and reversal has to be handled explicitly by matching panel *position* across
-two different curves rather than falling out of the physics.
+LidFlow closes most of that gap, in three tiers:
 
-Where Windows *does* expose `HingeAngleSensor`, LidFlow uses it: panel position
-comes from the hinge and blur from the measured rate of change, through the same
-animation model, so the two input modes cannot drift apart visually. It is enabled
-by default, feature-detected, and its absence is not an error. On most clamshell
-laptops it will be absent and the timed path will run.
+| Tier | Source | Behaviour |
+| --- | --- | --- |
+| 1 | `HingeAngleSensor` | Absolute angle. Exact one-to-one tracking, no calibration. Rare hardware. |
+| 2 | Lid inclinometer, calibrated against the switch | Relative angle made absolute by the switch's own two events. One-to-one tracking after the first close/open cycle. Common hardware. |
+| 3 | Neither | Timed animation through a tuned easing curve. Always available. |
+
+Tiers 1 and 2 make the transition a read-out of the hardware rather than a guess:
+the panel is wherever the lid is, so stopping half way, moving slowly and reversing
+all behave correctly without special handling, and the motion blur comes from the
+lid's genuine angular rate. Tier 3 is why the easing curves and durations still
+matter, and why reversal has to be handled explicitly by matching panel *position*
+across two different curves.
+
+What remains genuinely unclosable:
+
+- On hardware with **no motion sensor at all**, there is no angle to be had and
+  tier 3 is the ceiling.
+- On the **closing** side even a sensor helps less than it might, because by
+  default the transition still waits for the switch — which fires near the end of
+  the travel. `allowInclinometerEarlyClose` trades that for the ambiguity between
+  a moving lid and a moving laptop.
+- The lid switch itself will **never** report an intermediate value. Any continuous
+  behaviour has to come from a separate sensor; there is no way to extract it from
+  the switch.
 
 ---
 
@@ -584,8 +639,10 @@ Stated plainly, including the ones that cannot be fixed.
    near the end of travel and Windows powers the panel down on close. Under some
    power configurations very little is visible. This is not a bug and no software
    can widen it. Section 2.
-2. **No continuous lid angle on ordinary laptops.** The timed animation is an
-   approximation of the user's hand. Section 10.
+2. **No continuous lid angle on hardware with no motion sensor.** Machines with a
+   hinge-angle sensor or a lid-mounted inclinometer track the lid one-to-one;
+   everything else falls back to a timed approximation of the user's hand.
+   Section 10.
 3. **The opening animation is pre-empted by the lock screen** when sign-in on
    wakeup is required, because the logon UI is a different desktop.
 4. **HDR is flattened on the default capture path.** Desktop Duplication is always
@@ -628,6 +685,8 @@ Stated plainly, including the ones that cannot be fixed.
 - [Screen capture (Windows.Graphics.Capture)][wgc] — `https://learn.microsoft.com/en-us/windows/apps/develop/media-authoring-processing/screen-capture`
 - [IGraphicsCaptureItemInterop::CreateForMonitor][interop] — `https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createformonitor`
 - [HingeAngleSensor][hinge-sensor] — `https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.hingeanglesensor`
+- [Inclinometer][inclinometer] — `https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.inclinometer`
+- [Accelerometer][accelerometer] — `https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.accelerometer`
 - [DISPLAYCONFIG_TARGET_DEVICE_NAME][target-name] — `https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-displayconfig_target_device_name`
 - [DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY][vot] — `https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_video_output_technology`
 - [High-Performance Window Layering Using the Windows Composition Engine][layering] — `https://learn.microsoft.com/en-us/archive/msdn-magazine/2014/june/windows-with-c-high-performance-window-layering-using-the-windows-composition-engine`
@@ -650,6 +709,8 @@ Stated plainly, including the ones that cannot be fixed.
 [wgc]: https://learn.microsoft.com/en-us/windows/apps/develop/media-authoring-processing/screen-capture
 [interop]: https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createformonitor
 [hinge-sensor]: https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.hingeanglesensor
+[inclinometer]: https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.inclinometer
+[accelerometer]: https://learn.microsoft.com/en-us/uwp/api/windows.devices.sensors.accelerometer
 [target-name]: https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-displayconfig_target_device_name
 [vot]: https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_video_output_technology
 [layering]: https://learn.microsoft.com/en-us/archive/msdn-magazine/2014/june/windows-with-c-high-performance-window-layering-using-the-windows-composition-engine

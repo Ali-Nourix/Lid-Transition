@@ -44,11 +44,12 @@ public sealed class ConfigurationTests
             {
                 CloseDurationMs = -100,
                 OpenDurationMs = 10_000_000,
-                HingeBias = 42f,
+                PanelMaxAngleDeg = 400f,
+                PerspectiveStrength = -5f,
                 ShadowStrength = -3f,
                 MaxBlur = float.NaN,
-                BlurRadius = 0f,
-                GlareWidthPx = 0f,
+                BlurFalloff = 0f,
+                GlareWidth = 0f,
                 Quality = (AnimationQuality)999,
             },
             Monitor = new MonitorConfig { Mode = (MonitorSelectionMode)77, ManualDisplayId = "   " },
@@ -61,11 +62,12 @@ public sealed class ConfigurationTests
         Assert.Equal(1, config.Version);
         Assert.InRange(config.Animation.CloseDurationMs, 80, 2000);
         Assert.InRange(config.Animation.OpenDurationMs, 80, 2000);
-        Assert.InRange(config.Animation.HingeBias, 0.05f, 0.95f);
+        Assert.InRange(config.Animation.PanelMaxAngleDeg, 5f, 179f);
+        Assert.InRange(config.Animation.PerspectiveStrength, 0f, 4f);
         Assert.InRange(config.Animation.ShadowStrength, 0f, 1f);
         Assert.False(float.IsNaN(config.Animation.MaxBlur));
-        Assert.True(config.Animation.BlurRadius >= 1f);
-        Assert.True(config.Animation.GlareWidthPx >= 1f);
+        Assert.True(config.Animation.BlurFalloff >= 0.05f);
+        Assert.True(config.Animation.GlareWidth >= 0.001f);
         Assert.Equal(AnimationQuality.Balanced, config.Animation.Quality);
         Assert.Equal(MonitorSelectionMode.InternalPanel, config.Monitor.Mode);
         Assert.Null(config.Monitor.ManualDisplayId);
@@ -98,7 +100,7 @@ public sealed class ConfigurationTests
     {
         LidFlowConfig original = new();
         original.Animation.CloseDurationMs = 375;
-        original.Animation.HingeBias = 0.58f;
+        original.Animation.PerspectiveStrength = 1.2f;
         original.Animation.Quality = AnimationQuality.High;
         original.Animation.CloseEasing = new EasingSettings
         {
@@ -116,7 +118,7 @@ public sealed class ConfigurationTests
         restored!.Normalize();
 
         Assert.Equal(375, restored.Animation.CloseDurationMs);
-        Assert.Equal(0.58f, restored.Animation.HingeBias, 4);
+        Assert.Equal(1.2f, restored.Animation.PerspectiveStrength, 4);
         Assert.Equal(AnimationQuality.High, restored.Animation.Quality);
         Assert.Equal(EasingPreset.CustomBezier, restored.Animation.CloseEasing.Preset);
         Assert.Equal(MonitorSelectionMode.Manual, restored.Monitor.Mode);

@@ -14,74 +14,63 @@ public sealed class LidAnimationModelTests
         return config;
     }
 
-    [Fact]
-    public void ClosingFirstFrameLeavesTheSnapshotCompletelyUntouched()
+    /// <summary>
+    /// The forward projection the shader inverts: screen height above the hinge of
+    /// a point at distance <paramref name="s"/> along the panel. Replicated here so
+    /// the tests can reason about the geometry the shader actually produces.
+    /// </summary>
+    private static float ProjectedHeight(in LidFrameParameters frame, float s)
     {
-        // This is the "no flash, no frame mismatch" guarantee: the very first frame of a
-        // close must be indistinguishable from the real desktop, so every effect term has
-        // to be exactly zero and the aperture must sit outside the panel.
+        float denominator = 1f + (s * frame.SinTheta * frame.Perspective);
+        return denominator <= 1e-5f ? 0f : s * frame.CosTheta / denominator;
+    }
+
+    /// <summary>Projected half-width of the panel at distance <paramref name="s"/>, relative to fully open.</summary>
+    private static float ProjectedWidth(in LidFrameParameters frame, float s) =>
+        1f / (1f + (s * frame.SinTheta * frame.Perspective));
+
+    [Fact]
+    public void ClosingFirstFrameIsTheIdentityProjectionWithNoEffects()
+    {
+        // This is the "no flash, no frame mismatch" guarantee: the first frame of a
+        // close must be indistinguishable from the real desktop. That means the
+        // projection has to be exactly the identity and every optical term zero.
         LidAnimationModel model = new(Config(), TransitionKind.Close);
         LidFrameParameters frame = model.Evaluate(0f);
 
         Assert.Equal(0f, frame.Progress, 5);
-        Assert.True(frame.ApertureTop < 0f, "Top edge must start above the panel.");
-        Assert.True(frame.ApertureBottom > 1f, "Bottom edge must start below the panel.");
-        Assert.Equal(0f, frame.SideInset, 5);
-        Assert.Equal(0f, frame.Keystone, 5);
+        Assert.Equal(0f, frame.AngleDegrees, 5);
+        Assert.Equal(1f, frame.CosTheta, 5);
+        Assert.Equal(0f, frame.SinTheta, 5);
+
+        // No rotation means no foreshortening and no keystone anywhere.
+        for (int i = 0; i <= 10; i++)
+        {
+            float s = i / 10f;
+            Assert.Equal(s, ProjectedHeight(frame, s), 5);
+            Assert.Equal(1f, ProjectedWidth(frame, s), 5);
+        }
+
         Assert.Equal(0f, frame.BlurRadiusPx, 5);
         Assert.Equal(0f, frame.ShadowStrength, 5);
-        Assert.Equal(0f, frame.ShadowExtentPx, 5);
-        Assert.Equal(0f, frame.WarpStrength, 5);
-        Assert.Equal(0f, frame.DistortionStrength, 5);
         Assert.Equal(0f, frame.OffAxisWash, 5);
         Assert.Equal(0f, frame.GlareStrength, 5);
-        Assert.Equal(0f, frame.CornerRadiusPx, 5);
+        Assert.Equal(0f, frame.DistortionStrength, 5);
         Assert.Equal(0f, frame.BezelAmbient, 5);
         Assert.Equal(1f, frame.Luminance, 5);
+        Assert.Equal(1f, frame.ProjectedCoverage, 5);
     }
 
     [Fact]
-    public void BezelAmbientRampsInButStaysFarBelowContentLuminance()
-    {
-        // The bezel term exists to stop the boundary reading as a hole cut in the
-        // image. It has to be absent on the first frame, present once the panel is
-        // moving, and small enough never to look like a glow effect.
-        LidAnimationModel model = new(Config(), TransitionKind.Close);
-
-        Assert.Equal(0f, model.Evaluate(0f).BezelAmbient, 5);
-
-        float mid = model.Evaluate(0.5f).BezelAmbient;
-        Assert.True(mid > 0f, "Bezel ambient should be present mid-transition.");
-        Assert.True(mid < 0.05f, $"Bezel ambient {mid} is too strong to read as a bezel.");
-    }
-
-    [Fact]
-    public void DisablingShadowAlsoRemovesTheBezelAmbient()
-    {
-        // They are the same physical idea - light behaviour at the panel edge - so
-        // turning the edge treatment off must remove both.
-        AnimationConfig config = Config();
-        config.EnableShadow = false;
-        config.Normalize();
-
-        LidAnimationModel model = new(config, TransitionKind.Close);
-
-        for (int i = 0; i <= 20; i++)
-        {
-            Assert.Equal(0f, model.Evaluate(i / 20f).BezelAmbient, 5);
-        }
-    }
-
-    [Fact]
-    public void ClosingLastFrameCollapsesTheApertureToNothing()
+    public void ClosingLastFrameLeavesThePanelEdgeOnAndCoveringNothing()
     {
         LidAnimationModel model = new(Config(), TransitionKind.Close);
         LidFrameParameters frame = model.Evaluate(1f);
 
         Assert.Equal(1f, frame.Progress, 5);
-        Assert.Equal(0f, frame.ApertureHeight, 5);
-        Assert.Equal(frame.HingeY, frame.ApertureTop, 5);
-        Assert.Equal(frame.HingeY, frame.ApertureBottom, 5);
+        Assert.Equal(90f, frame.AngleDegrees, 4);
+        Assert.Equal(0f, frame.CosTheta, 5);
+        Assert.Equal(0f, frame.ProjectedCoverage, 5);
     }
 
     [Fact]
@@ -90,19 +79,17 @@ public sealed class LidAnimationModelTests
         LidAnimationModel model = new(Config(), TransitionKind.Open);
 
         Assert.Equal(1f, model.Evaluate(0f).Progress, 5);
-        Assert.Equal(0f, model.Evaluate(0f).ApertureHeight, 5);
+        Assert.Equal(0f, model.Evaluate(0f).ProjectedCoverage, 5);
 
         LidFrameParameters last = model.Evaluate(1f);
         Assert.Equal(0f, last.Progress, 5);
-        Assert.True(last.ApertureTop < 0f);
-        Assert.True(last.ApertureBottom > 1f);
+        Assert.Equal(1f, last.ProjectedCoverage, 5);
         Assert.Equal(0f, last.BlurRadiusPx, 5);
     }
 
     [Fact]
     public void OpeningIsNotAMirroredReplayOfClosing()
     {
-        // Requirement: opening uses its own tuned curve and its own (shorter) duration.
         AnimationConfig config = Config();
         LidAnimationModel close = new(config, TransitionKind.Close);
         LidAnimationModel open = new(config, TransitionKind.Open);
@@ -113,7 +100,6 @@ public sealed class LidAnimationModelTests
         for (int i = 1; i < 20; i++)
         {
             float t = i / 20f;
-            // Compare panel position at mirrored times.
             if (MathF.Abs(close.Evaluate(t).Progress - (1f - open.Evaluate(t).Progress)) > 1e-3f)
             {
                 differs = true;
@@ -125,59 +111,105 @@ public sealed class LidAnimationModelTests
     }
 
     [Fact]
-    public void ApertureHeightShrinksMonotonicallyWhileClosing()
+    public void PanelCoverageShrinksMonotonicallyWhileClosing()
     {
         LidAnimationModel model = new(Config(), TransitionKind.Close);
         float previous = float.MaxValue;
 
         for (int i = 0; i <= 300; i++)
         {
-            float height = model.Evaluate(i / 300f).ApertureHeight;
-            Assert.True(height <= previous + 1e-4f, $"Aperture grew at t={i / 300f}");
-            previous = height;
+            float coverage = model.Evaluate(i / 300f).ProjectedCoverage;
+            Assert.True(coverage <= previous + 1e-4f, $"Coverage grew at t={i / 300f}");
+            previous = coverage;
         }
     }
 
     [Fact]
-    public void TopEdgeTravelsFurtherThanBottomEdge()
+    public void RotationForeshortensTowardTheHingeSoBlackGrowsFromTheTop()
     {
-        // The asymmetry is what makes it read as a hinge below the screen rather than an iris.
-        AnimationConfig config = Config();
-        LidAnimationModel model = new(config, TransitionKind.Close);
+        // The defining geometry: the hinge edge stays put and the far edge travels
+        // toward it, so whatever the panel stops covering is at the TOP.
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+        LidFrameParameters mid = model.Evaluate(0.5f);
 
-        LidFrameParameters start = model.Evaluate(0f);
-        LidFrameParameters end = model.Evaluate(1f);
+        Assert.True(mid.AngleDegrees > 0f);
 
-        float topTravel = end.ApertureTop - start.ApertureTop;
-        float bottomTravel = start.ApertureBottom - end.ApertureBottom;
+        // The hinge edge does not move.
+        Assert.Equal(0f, ProjectedHeight(mid, 0f), 5);
 
-        Assert.True(topTravel > bottomTravel, $"Top travel {topTravel} should exceed bottom travel {bottomTravel}.");
-        Assert.True(config.HingeBias > 0.5f, "Default hinge line should sit below centre.");
+        // Every row above it has moved down, and the further up it started the
+        // further it has come.
+        float previousShift = -1f;
+        for (int i = 1; i <= 10; i++)
+        {
+            float s = i / 10f;
+            float shift = s - ProjectedHeight(mid, s);
+
+            Assert.True(shift > 0f, $"Row s={s} should have moved toward the hinge.");
+            Assert.True(shift > previousShift, "Rows further from the hinge must move further.");
+            previousShift = shift;
+        }
     }
 
     [Fact]
-    public void ApertureIsATrapezoidNarrowingAwayFromTheHinge()
+    public void RotationKeystonesSoThePanelNarrowsTowardTheFarEdge()
     {
         LidAnimationModel model = new(Config(), TransitionKind.Close);
-        LidFrameParameters mid = model.Evaluate(0.65f);
+        LidFrameParameters mid = model.Evaluate(0.5f);
 
-        Assert.True(mid.SideInset > 0f, "Sides should have started closing by mid-transition.");
-        Assert.True(mid.Keystone > 0f, "Keystone must be non-zero for the perspective cue.");
+        float atHinge = ProjectedWidth(mid, 0f);
+        float atFarEdge = ProjectedWidth(mid, 1f);
+
+        Assert.Equal(1f, atHinge, 5);
+        Assert.True(atFarEdge < atHinge, "The far edge must project narrower than the hinge edge.");
+
+        // Monotonic, so the panel outline is a clean trapezoid rather than a
+        // pinched shape.
+        float previous = float.MaxValue;
+        for (int i = 0; i <= 10; i++)
+        {
+            float width = ProjectedWidth(mid, i / 10f);
+            Assert.True(width <= previous + 1e-5f);
+            previous = width;
+        }
     }
 
     [Fact]
-    public void SidesStartClosingLaterThanTopAndBottom()
+    public void WithoutPerspectiveThereIsNoKeystone()
     {
+        // Orthographic squash: still foreshortens, but no convergence. Useful as a
+        // tuning baseline, and it proves the keystone comes from the projection.
         AnimationConfig config = Config();
-        LidAnimationModel model = new(config, TransitionKind.Close);
+        config.PerspectiveStrength = 0f;
+        config.Normalize();
 
-        // Find a time whose panel progress is below the side delay and assert the sides
-        // have not moved, while the top/bottom edges already have.
-        float t = model.FindLinearTimeForPanelProgress(config.SideDelay * 0.5f);
-        LidFrameParameters frame = model.Evaluate(t);
+        LidFrameParameters mid = new LidAnimationModel(config, TransitionKind.Close).Evaluate(0.5f);
 
-        Assert.Equal(0f, frame.SideInset, 5);
-        Assert.True(frame.ApertureHeight < 1f, "Top/bottom edges should already be moving.");
+        Assert.Equal(1f, ProjectedWidth(mid, 1f), 5);
+        Assert.True(ProjectedHeight(mid, 1f) < 1f, "It should still foreshorten.");
+    }
+
+    [Fact]
+    public void BlurIsStrongestAtTheFarEdgeAndZeroAtTheHinge()
+    {
+        // The point the reference makes plainly: blur comes from the top and fades
+        // downward, because a row's speed is proportional to its distance from the
+        // hinge. The shader multiplies BlurRadiusPx by pow(s, BlurFalloff), so the
+        // gradient is asserted here through that relationship.
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+        LidFrameParameters mid = model.Evaluate(0.4f);
+
+        Assert.True(mid.BlurRadiusPx > 1f, "There should be real blur mid-transition.");
+
+        float atHinge = mid.BlurRadiusPx * MathF.Pow(0f, mid.BlurFalloff);
+        float quarter = mid.BlurRadiusPx * MathF.Pow(0.25f, mid.BlurFalloff);
+        float half = mid.BlurRadiusPx * MathF.Pow(0.5f, mid.BlurFalloff);
+        float atFarEdge = mid.BlurRadiusPx * MathF.Pow(1f, mid.BlurFalloff);
+
+        Assert.Equal(0f, atHinge, 5);
+        Assert.True(quarter < half);
+        Assert.True(half < atFarEdge);
+        Assert.Equal(mid.BlurRadiusPx, atFarEdge, 4);
     }
 
     [Fact]
@@ -198,10 +230,8 @@ public sealed class LidAnimationModelTests
     }
 
     [Fact]
-    public void BlurFollowsEdgeSpeedNotElapsedTime()
+    public void BlurFollowsRotationSpeedNotElapsedTime()
     {
-        // With full velocity influence the blur must vanish once the edge stops moving,
-        // even though progress is still high.
         AnimationConfig config = Config();
         config.BlurVelocityInfluence = 1f;
         config.Normalize();
@@ -213,6 +243,69 @@ public sealed class LidAnimationModelTests
 
         Assert.True(early.EdgeVelocity > late.EdgeVelocity);
         Assert.True(early.BlurRadiusPx > late.BlurRadiusPx);
+    }
+
+    [Fact]
+    public void ShadowAndWashAlsoWeightTowardTheFarEdge()
+    {
+        // Same physical reason as the blur: the far edge is the most oblique and
+        // the furthest away, so it dims and washes out first.
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+        LidFrameParameters mid = model.Evaluate(0.5f);
+
+        Assert.True(mid.ShadowStrength > 0f);
+        Assert.True(mid.ShadowFalloff > 1f, "The dim should concentrate toward the far edge.");
+        Assert.True(mid.OffAxisWash > 0f);
+
+        float dimAtHinge = mid.ShadowStrength * MathF.Pow(0f, mid.ShadowFalloff);
+        float dimAtFarEdge = mid.ShadowStrength * MathF.Pow(1f, mid.ShadowFalloff);
+
+        Assert.Equal(0f, dimAtHinge, 5);
+        Assert.True(dimAtFarEdge > dimAtHinge);
+    }
+
+    [Fact]
+    public void GlareSitsOnTheLeadingEdge()
+    {
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+        LidFrameParameters mid = model.Evaluate(0.5f);
+
+        Assert.True(mid.GlareStrength > 0f);
+
+        // The shader's envelope is exp(-((1-s)/width)^2), so it peaks at s = 1.
+        float atFarEdge = MathF.Exp(-MathF.Pow((1f - 1f) / mid.GlareWidth, 2f));
+        float atHinge = MathF.Exp(-MathF.Pow((1f - 0f) / mid.GlareWidth, 2f));
+
+        Assert.Equal(1f, atFarEdge, 5);
+        Assert.True(atHinge < 0.01f, "The highlight must not reach the hinge edge.");
+    }
+
+    [Fact]
+    public void TheHingeEdgeStaysSharpAndBrightThroughout()
+    {
+        // The single most load-bearing consequence of the model: whatever else
+        // happens, the row at the hinge is neither blurred nor dimmed, because it
+        // is not moving. If this ever fails the effect reads as a global fade.
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+
+        for (int i = 0; i <= 50; i++)
+        {
+            LidFrameParameters frame = model.Evaluate(i / 50f);
+
+            Assert.Equal(0f, frame.BlurRadiusPx * MathF.Pow(0f, frame.BlurFalloff), 5);
+            Assert.Equal(0f, frame.ShadowStrength * MathF.Pow(0f, frame.ShadowFalloff), 5);
+        }
+    }
+
+    [Fact]
+    public void TheHingeSitsBelowTheVisiblePanel()
+    {
+        // A real hinge is behind the bottom bezel, so the bottom row foreshortens
+        // slightly too rather than being pinned dead still.
+        LidFrameParameters frame = new LidAnimationModel(Config(), TransitionKind.Close).Evaluate(0.5f);
+
+        Assert.True(frame.PivotV > 1f, "The pivot must be below the bottom of the display.");
+        Assert.True(frame.PivotV < 1.5f, "But not so far below that the panel barely moves.");
     }
 
     [Fact]
@@ -234,7 +327,23 @@ public sealed class LidAnimationModelTests
             Assert.Equal(0f, frame.ShadowStrength, 5);
             Assert.Equal(0f, frame.DistortionStrength, 5);
             Assert.Equal(0f, frame.GlareStrength, 5);
+            Assert.Equal(0f, frame.BezelAmbient, 5);
         }
+
+        // Rotation is geometry, not an effect, so it must still happen.
+        Assert.True(model.Evaluate(0.5f).AngleDegrees > 0f);
+    }
+
+    [Fact]
+    public void BezelAmbientRampsInButStaysFarBelowContentLuminance()
+    {
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+
+        Assert.Equal(0f, model.Evaluate(0f).BezelAmbient, 5);
+
+        float mid = model.Evaluate(0.5f).BezelAmbient;
+        Assert.True(mid > 0f, "Bezel ambient should be present mid-transition.");
+        Assert.True(mid < 0.05f, $"Bezel ambient {mid} is too strong to read as a bezel.");
     }
 
     [Theory]
@@ -275,8 +384,6 @@ public sealed class LidAnimationModelTests
     [Fact]
     public void ReversalMatchesPanelPositionAcrossDirections()
     {
-        // Reversing mid-flight must not jump the panel: the open animation resumed at the
-        // matched time has to show the same aperture as the close animation it replaced.
         AnimationConfig config = Config();
         LidAnimationModel close = new(config, TransitionKind.Close);
         LidAnimationModel open = new(config, TransitionKind.Open);
@@ -286,40 +393,41 @@ public sealed class LidAnimationModelTests
         LidFrameParameters resumed = open.Evaluate(resumeT);
 
         Assert.InRange(resumed.Progress, interrupted.Progress - 0.02f, interrupted.Progress + 0.02f);
-        Assert.InRange(resumed.ApertureTop, interrupted.ApertureTop - 0.02f, interrupted.ApertureTop + 0.02f);
-        Assert.InRange(resumed.ApertureBottom, interrupted.ApertureBottom - 0.02f, interrupted.ApertureBottom + 0.02f);
+        Assert.InRange(resumed.AngleDegrees, interrupted.AngleDegrees - 2f, interrupted.AngleDegrees + 2f);
+        Assert.InRange(
+            resumed.ProjectedCoverage,
+            interrupted.ProjectedCoverage - 0.03f,
+            interrupted.ProjectedCoverage + 0.03f);
     }
 
     [Fact]
     public void EveryOutputStaysFiniteForRandomConfigurations()
     {
-        // A hand-edited config.json must never be able to produce NaN, which on the GPU
-        // would show up as a garbage frame rather than a clean failure.
+        // A hand-edited config.json must never be able to produce NaN, which on the
+        // GPU would show up as a garbage frame rather than a clean failure.
         Random random = new(20260910);
 
         for (int iteration = 0; iteration < 400; iteration++)
         {
             AnimationConfig config = new()
             {
-                HingeBias = (float)random.NextDouble() * 3f - 1f,
-                EdgeExpansion = (float)random.NextDouble() * 4f - 1f,
-                SideDelay = (float)random.NextDouble() * 3f - 1f,
-                PerspectiveStrength = (float)random.NextDouble() * 10f - 2f,
+                PanelMaxAngleDeg = (float)random.NextDouble() * 400f - 100f,
+                PerspectiveStrength = (float)random.NextDouble() * 12f - 4f,
+                HingeOffset = (float)random.NextDouble() * 4f - 2f,
                 EdgeSoftness = (float)random.NextDouble() * 200f - 50f,
-                CornerRadiusPx = (float)random.NextDouble() * 1000f - 200f,
-                ShadowExtentPx = (float)random.NextDouble() * 3000f - 500f,
-                ShadowStrength = (float)random.NextDouble() * 4f - 2f,
                 MaxBlur = (float)random.NextDouble() * 900f - 100f,
-                BlurRadius = (float)random.NextDouble() * 5000f - 1000f,
+                BlurFalloff = (float)random.NextDouble() * 20f - 5f,
                 BlurVelocityInfluence = (float)random.NextDouble() * 3f - 1f,
                 BlackOpacity = (float)random.NextDouble() * 3f - 1f,
+                ShadowStrength = (float)random.NextDouble() * 4f - 2f,
+                ShadowFalloff = (float)random.NextDouble() * 20f - 5f,
                 GlareStrength = (float)random.NextDouble() * 5f - 2f,
-                GlareOffsetPx = (float)random.NextDouble() * 2000f - 500f,
-                GlareWidthPx = (float)random.NextDouble() * 2000f - 500f,
-                WarpStrength = (float)random.NextDouble() * 4f - 2f,
+                GlareWidth = (float)random.NextDouble() * 5f - 2f,
                 DistortionStrength = (float)random.NextDouble() * 20f - 5f,
                 OffAxisWash = (float)random.NextDouble() * 4f - 2f,
                 GlobalDim = (float)random.NextDouble() * 4f - 2f,
+                BezelAmbient = (float)random.NextDouble() * 4f - 2f,
+                BezelFalloffPx = (float)random.NextDouble() * 900f - 200f,
                 CloseDurationMs = random.Next(-5000, 100_000),
                 OpenDurationMs = random.Next(-5000, 100_000),
             };
@@ -331,8 +439,7 @@ public sealed class LidAnimationModelTests
 
                 for (int i = 0; i <= 16; i++)
                 {
-                    LidFrameParameters frame = model.Evaluate(i / 16f);
-                    AssertAllFinite(frame);
+                    AssertAllFinite(model.Evaluate(i / 16f));
                 }
             }
         }
@@ -342,26 +449,24 @@ public sealed class LidAnimationModelTests
     {
         Assert.True(float.IsFinite(frame.Progress), nameof(frame.Progress));
         Assert.True(float.IsFinite(frame.EdgeVelocity), nameof(frame.EdgeVelocity));
-        Assert.True(float.IsFinite(frame.ApertureTop), nameof(frame.ApertureTop));
-        Assert.True(float.IsFinite(frame.ApertureBottom), nameof(frame.ApertureBottom));
-        Assert.True(float.IsFinite(frame.SideInset), nameof(frame.SideInset));
-        Assert.True(float.IsFinite(frame.Keystone), nameof(frame.Keystone));
-        Assert.True(float.IsFinite(frame.HingeY), nameof(frame.HingeY));
-        Assert.True(float.IsFinite(frame.CornerRadiusPx), nameof(frame.CornerRadiusPx));
+        Assert.True(float.IsFinite(frame.AngleDegrees), nameof(frame.AngleDegrees));
+        Assert.True(float.IsFinite(frame.CosTheta), nameof(frame.CosTheta));
+        Assert.True(float.IsFinite(frame.SinTheta), nameof(frame.SinTheta));
+        Assert.True(float.IsFinite(frame.Perspective), nameof(frame.Perspective));
+        Assert.True(float.IsFinite(frame.PivotV), nameof(frame.PivotV));
         Assert.True(float.IsFinite(frame.EdgeSoftnessPx), nameof(frame.EdgeSoftnessPx));
-        Assert.True(float.IsFinite(frame.ShadowExtentPx), nameof(frame.ShadowExtentPx));
-        Assert.True(float.IsFinite(frame.ShadowStrength), nameof(frame.ShadowStrength));
         Assert.True(float.IsFinite(frame.BlurRadiusPx), nameof(frame.BlurRadiusPx));
-        Assert.True(float.IsFinite(frame.BlurExtentPx), nameof(frame.BlurExtentPx));
+        Assert.True(float.IsFinite(frame.BlurFalloff), nameof(frame.BlurFalloff));
         Assert.True(float.IsFinite(frame.BlackOpacity), nameof(frame.BlackOpacity));
-        Assert.True(float.IsFinite(frame.GlareStrength), nameof(frame.GlareStrength));
-        Assert.True(float.IsFinite(frame.GlareOffsetPx), nameof(frame.GlareOffsetPx));
-        Assert.True(float.IsFinite(frame.GlareWidthPx), nameof(frame.GlareWidthPx));
-        Assert.True(float.IsFinite(frame.WarpStrength), nameof(frame.WarpStrength));
-        Assert.True(float.IsFinite(frame.DistortionStrength), nameof(frame.DistortionStrength));
+        Assert.True(float.IsFinite(frame.ShadowStrength), nameof(frame.ShadowStrength));
+        Assert.True(float.IsFinite(frame.ShadowFalloff), nameof(frame.ShadowFalloff));
         Assert.True(float.IsFinite(frame.OffAxisWash), nameof(frame.OffAxisWash));
         Assert.True(float.IsFinite(frame.Luminance), nameof(frame.Luminance));
+        Assert.True(float.IsFinite(frame.GlareStrength), nameof(frame.GlareStrength));
+        Assert.True(float.IsFinite(frame.GlareWidth), nameof(frame.GlareWidth));
+        Assert.True(float.IsFinite(frame.DistortionStrength), nameof(frame.DistortionStrength));
         Assert.True(float.IsFinite(frame.BezelAmbient), nameof(frame.BezelAmbient));
         Assert.True(float.IsFinite(frame.BezelFalloffPx), nameof(frame.BezelFalloffPx));
+        Assert.True(float.IsFinite(frame.ProjectedCoverage), nameof(frame.ProjectedCoverage));
     }
 }

@@ -57,8 +57,10 @@ internal sealed class TransitionController : IDisposable
     private bool _frameQueued;
     private bool _disposed;
 
-    // Hinge tracking
+    // Continuous lid position
     private readonly HingeAngleMonitor _hinge;
+    private readonly InclinometerMonitor _inclinometer;
+    private readonly LidAngleTracker _angleTracker;
     private double _hingeProgressRate;
     private float _lastHingeProgress = float.NaN;
     private long _lastHingeStamp;
@@ -78,6 +80,8 @@ internal sealed class TransitionController : IDisposable
         _machine = new TransitionStateMachine(config.Animation.EnableAnimation);
 
         _hinge = new HingeAngleMonitor(_log);
+        _inclinometer = new InclinometerMonitor(_log);
+        _angleTracker = new LidAngleTracker(config.Animation.InclinometerCalibration);
 
         _messageWindow.FrameRequested += (_, _) => OnFrame();
         _messageWindow.Suspending += (_, _) => Fire(TransitionTrigger.Suspending);
@@ -104,17 +108,34 @@ internal sealed class TransitionController : IDisposable
         SoftwareRenderer = _graphics?.IsSoftware ?? false,
         CaptureExcluded = _overlay?.ExcludedFromCapture ?? false,
         DisplayPower = DisplayPower,
-        HingeTracking = IsHingeTracking,
+        AngleSource = AngleSource,
         HingeAngleDegrees = _hinge.Current?.AngleDegrees,
+        LidPitchDegrees = _inclinometer.IsAvailable ? _angleTracker.LastPitchDegrees : null,
+        PitchSensor = _inclinometer.SourceName,
+        CalibrationSweepDegrees = _angleTracker.IsCalibrated ? _angleTracker.SweepDegrees : null,
     };
 
     /// <summary>
-    /// True when the panel position is being read from the hardware hinge rather
-    /// than played from a timed curve.
+    /// True when the panel position is read from a real hinge-angle sensor.
+    /// Absolute and exact, so it is preferred over everything else.
     /// </summary>
     private bool IsHingeTracking => _config.Animation.UseHingeAngleWhenAvailable
         && _hinge.IsAvailable
         && _hinge.Current is not null;
+
+    /// <summary>
+    /// True when the panel position is read from a calibrated lid inclinometer.
+    /// Relative rather than absolute, but available on far more machines.
+    /// </summary>
+    private bool IsInclinometerTracking => !IsHingeTracking
+        && _config.Animation.UseInclinometerWhenAvailable
+        && _inclinometer.IsAvailable
+        && _angleTracker.IsCalibrated;
+
+    /// <summary>Which continuous source, if any, is driving the current transition.</summary>
+    private LidAngleSourceKind AngleSource => IsHingeTracking
+        ? LidAngleSourceKind.HingeAngleSensor
+        : (IsInclinometerTracking ? LidAngleSourceKind.LidInclinometer : LidAngleSourceKind.None);
 
     // ------------------------------------------------------------------ startup
 
@@ -137,6 +158,32 @@ internal sealed class TransitionController : IDisposable
                     _messageWindow.RequestFrame();
                 }
             };
+        }
+
+        if (_config.Animation.UseInclinometerWhenAvailable && !_hinge.IsAvailable && _inclinometer.TryStart())
+        {
+            _inclinometer.PitchChanged += (_, sample) =>
+            {
+                _angleTracker.Update(sample.PitchDegrees, sample.TimestampSeconds);
+
+                if (_machine.IsAnimating)
+                {
+                    _messageWindow.RequestFrame();
+                }
+            };
+
+            if (_angleTracker.IsCalibrated)
+            {
+                _log.Info(
+                    $"Using a persisted inclinometer calibration (sweep {_angleTracker.SweepDegrees:0.#} deg); " +
+                    "the lid position will be tracked from the first transition.");
+            }
+            else
+            {
+                _log.Info(
+                    "Inclinometer available but not yet calibrated. The first close/open cycle teaches it the " +
+                    "pitch range; until then the transition is timed.");
+            }
         }
 
         RefreshDisplays();
@@ -248,6 +295,10 @@ internal sealed class TransitionController : IDisposable
 
     public void OnLidStateChanged(LidState state)
     {
+        // The switch is what calibrates the inclinometer: it supplies the two ends
+        // of the pitch range that the readings in between are measured against.
+        _angleTracker.ObserveLidState(state);
+
         switch (state)
         {
             case LidState.Closed:
@@ -528,9 +579,9 @@ internal sealed class TransitionController : IDisposable
             return;
         }
 
-        if (IsHingeTracking)
+        if (AngleSource != LidAngleSourceKind.None)
         {
-            // Hinge-tracking mode has no duration: the transition is over when the
+            // Tracking mode has no duration: the transition is over when the
             // lid actually reaches an endpoint, not when a timer expires.
             float target = _kind == TransitionKind.Close ? 1f : 0f;
 
@@ -587,9 +638,9 @@ internal sealed class TransitionController : IDisposable
             return false;
         }
 
-        if (IsHingeTracking)
+        if (AngleSource != LidAngleSourceKind.None)
         {
-            return RenderFromHinge();
+            return RenderFromLidPosition();
         }
 
         double duration = Math.Max(EffectiveDurationMs(), 1d);
@@ -606,27 +657,41 @@ internal sealed class TransitionController : IDisposable
     }
 
     /// <summary>
-    /// Renders the frame implied by the current hinge angle.
+    /// Renders the frame implied by the lid's actual position.
     /// <para>
-    /// The aperture position comes straight from the hardware and the blur from
+    /// The rotation comes straight from the hardware - a hinge-angle sensor where
+    /// there is one, otherwise a calibrated lid inclinometer - and the blur from
     /// the measured rate of change, so the effect tracks the user's hand instead
-    /// of guessing. Everything else - geometry, falloff, glare - is produced by
-    /// the same animation model the timed path uses, so the two modes cannot look
-    /// like different effects.
+    /// of guessing. Everything else is produced by the same animation model the
+    /// timed path uses, so the modes cannot look like different effects.
     /// </para>
     /// </summary>
-    private bool RenderFromHinge()
+    private bool RenderFromLidPosition()
     {
-        HingeAngleSample? sample = _hinge.Current;
-        if (sample is null || _model is null)
+        if (_model is null)
         {
             return false;
         }
 
-        float progress = LidFlow.Core.Lid.HingeAngleMapping.ProgressFromAngle(
-            sample.Value.AngleDegrees,
-            _config.Animation.HingeClosedAngleDeg,
-            _config.Animation.HingeOpenAngleDeg);
+        float progress;
+
+        if (IsHingeTracking)
+        {
+            HingeAngleSample? sample = _hinge.Current;
+            if (sample is null)
+            {
+                return false;
+            }
+
+            progress = LidFlow.Core.Lid.HingeAngleMapping.ProgressFromAngle(
+                sample.Value.AngleDegrees,
+                _config.Animation.HingeClosedAngleDeg,
+                _config.Animation.HingeOpenAngleDeg);
+        }
+        else if (!_angleTracker.TryGetProgress(out progress, out _))
+        {
+            return false;
+        }
 
         long now = Stopwatch.GetTimestamp();
 
@@ -748,6 +813,13 @@ internal sealed class TransitionController : IDisposable
         _graphics = null;
     }
 
+    /// <summary>
+    /// The inclinometer calibration learned this session, for persisting. Null when
+    /// there is nothing new worth saving.
+    /// </summary>
+    public LidAngleCalibration? LearnedCalibration =>
+        _angleTracker.IsCalibrated ? _angleTracker.Snapshot() : null;
+
     public void Dispose()
     {
         if (_disposed)
@@ -756,6 +828,7 @@ internal sealed class TransitionController : IDisposable
         }
 
         _disposed = true;
+        _inclinometer.Dispose();
         _hinge.Dispose();
         ReleaseGraphics();
     }
@@ -788,9 +861,18 @@ internal readonly struct DiagnosticsSnapshot
 
     public DisplayPowerState DisplayPower { get; init; }
 
-    /// <summary>Whether the panel position is read from the hardware hinge.</summary>
-    public bool HingeTracking { get; init; }
+    /// <summary>Which continuous source, if any, is driving the transition.</summary>
+    public LidAngleSourceKind AngleSource { get; init; }
 
-    /// <summary>Current hinge angle, when a sensor is present.</summary>
+    /// <summary>Current hinge angle, when a hinge-angle sensor is present.</summary>
     public double? HingeAngleDegrees { get; init; }
+
+    /// <summary>Current lid pitch, when an inclinometer or accelerometer is present.</summary>
+    public double? LidPitchDegrees { get; init; }
+
+    /// <summary>Which pitch sensor was found.</summary>
+    public string PitchSensor { get; init; }
+
+    /// <summary>Learned pitch sweep, once calibrated.</summary>
+    public double? CalibrationSweepDegrees { get; init; }
 }

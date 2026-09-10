@@ -39,18 +39,18 @@ public sealed class HingeAngleMappingTests
     }
 
     [Fact]
-    public void MappingFollowsProjectedHeightRatherThanRawAngle()
+    public void MappingIsLinearInTheAngle()
     {
-        // The aperture tracks sin(angle), because that is the projected height of a
-        // panel rotating about its hinge. A linear-in-angle mapping would put the
-        // half-way point at the arithmetic mid-angle; this one must not.
+        // Progress here means "how far through its travel the hinge is", which is
+        // exactly what the sensor reports. The geometry - the sine and cosine of
+        // the rotation - lives in the projection, so curving it here as well would
+        // double-apply it and make the image lag the physical panel.
         const float Closed = 0f;
         const float Open = 90f;
 
-        float atMidAngle = HingeAngleMapping.ProgressFromAngle(45d, Closed, Open);
-
-        // sin(45) = 0.7071, so 29% closed at the mid-angle, not 50%.
-        Assert.InRange(atMidAngle, 0.28f, 0.30f);
+        Assert.Equal(0.5f, HingeAngleMapping.ProgressFromAngle(45d, Closed, Open), 4);
+        Assert.Equal(0.75f, HingeAngleMapping.ProgressFromAngle(22.5d, Closed, Open), 4);
+        Assert.Equal(0.25f, HingeAngleMapping.ProgressFromAngle(67.5d, Closed, Open), 4);
     }
 
     [Fact]
@@ -132,15 +132,16 @@ public sealed class HingeDrivenAnimationTests
         LidFrameParameters timedStart = model.Evaluate(0f);
         LidFrameParameters hingeStart = model.EvaluateAtProgress(0f, 0f);
 
-        Assert.Equal(timedStart.ApertureTop, hingeStart.ApertureTop, 5);
-        Assert.Equal(timedStart.ApertureBottom, hingeStart.ApertureBottom, 5);
+        Assert.Equal(timedStart.AngleDegrees, hingeStart.AngleDegrees, 5);
+        Assert.Equal(timedStart.CosTheta, hingeStart.CosTheta, 5);
+        Assert.Equal(timedStart.SinTheta, hingeStart.SinTheta, 5);
         Assert.Equal(timedStart.BlurRadiusPx, hingeStart.BlurRadiusPx, 5);
 
         LidFrameParameters timedEnd = model.Evaluate(1f);
         LidFrameParameters hingeEnd = model.EvaluateAtProgress(1f, 0f);
 
-        Assert.Equal(timedEnd.ApertureHeight, hingeEnd.ApertureHeight, 5);
-        Assert.Equal(0f, hingeEnd.ApertureHeight, 5);
+        Assert.Equal(timedEnd.AngleDegrees, hingeEnd.AngleDegrees, 5);
+        Assert.Equal(0f, hingeEnd.ProjectedCoverage, 5);
     }
 
     [Fact]
@@ -160,9 +161,10 @@ public sealed class HingeDrivenAnimationTests
         Assert.Equal(0f, still.BlurRadiusPx, 5);
         Assert.True(moving.BlurRadiusPx > 1f);
 
-        // The aperture itself must be in the same place either way.
-        Assert.Equal(still.ApertureTop, moving.ApertureTop, 5);
-        Assert.Equal(still.ApertureBottom, moving.ApertureBottom, 5);
+        // The panel itself must be in the same place either way: only the blur
+        // depends on how fast it is moving.
+        Assert.Equal(still.AngleDegrees, moving.AngleDegrees, 5);
+        Assert.Equal(still.ProjectedCoverage, moving.ProjectedCoverage, 5);
     }
 
     [Fact]
@@ -180,8 +182,10 @@ public sealed class HingeDrivenAnimationTests
                 {
                     LidFrameParameters frame = model.EvaluateAtProgress(p / 40f, v / 4f);
 
-                    Assert.True(float.IsFinite(frame.ApertureTop));
-                    Assert.True(float.IsFinite(frame.ApertureBottom));
+                    Assert.True(float.IsFinite(frame.AngleDegrees));
+                    Assert.True(float.IsFinite(frame.CosTheta));
+                    Assert.True(float.IsFinite(frame.SinTheta));
+                    Assert.True(float.IsFinite(frame.ProjectedCoverage));
                     Assert.True(float.IsFinite(frame.BlurRadiusPx));
                     Assert.True(float.IsFinite(frame.ShadowStrength));
                     Assert.True(float.IsFinite(frame.Luminance));

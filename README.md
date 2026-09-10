@@ -167,17 +167,49 @@ DPI scale.
 
 ---
 
-## Hinge-angle tracking
+## Tracking the actual lid position
 
-If your machine has a hinge-angle sensor (dual-screen and foldable hardware —
-most clamshell laptops do not), LidFlow reads it and the aperture follows the
-hinge one-to-one instead of playing a timed animation. Stopping half way, moving
-slowly and reversing then all behave correctly, and the motion blur comes from how
-fast you are actually moving the lid.
+The Windows lid switch only ever reports **0 or 1** — closed or open, with nothing
+in between. On its own it can say *that* the lid moved but never *how far*, which
+is why a plain implementation has to play a fixed-length animation and hope it
+lines up with your hand.
 
-It is on by default, detected at start-up, and its absence is not an error —
-`--debug` shows which input mode is active. Ordinary laptops use the timed path,
-which is why the easing curves and durations matter as much as they do.
+LidFlow does better where the hardware allows, in three tiers, picked
+automatically at start-up:
+
+| | Source | What you get |
+| --- | --- | --- |
+| **1** | Hinge-angle sensor | Exact one-to-one tracking. No calibration. Dual-screen and foldable hardware. |
+| **2** | Lid inclinometer or accelerometer | One-to-one tracking after one close/open cycle. **Most laptops with auto-rotate or a tablet mode.** |
+| **3** | Neither | Timed animation through a tuned easing curve. |
+
+**How tier 2 works.** On a machine with auto-rotate, the motion sensor is in the
+*display* — so its pitch moves with the lid. That gives a continuous angle, but a
+relative one: the sensor has no idea what "closed" means. The lid switch does, and
+that is exactly what calibrates it:
+
+- when the switch says **closed**, the current pitch is one end of the range;
+- while the lid sits **open and still**, the current pitch is the other end.
+
+Two observations, and everything in between becomes readable. It is learned from
+your real lid movements, persisted to `config.json`, and works whichever way round
+the sensor happens to be mounted. Only the very first close/open cycle on a machine
+runs on the timed path.
+
+In tiers 1 and 2 the panel is wherever your lid is: stop half way and it holds
+position and goes sharp, move slowly and it follows, reverse and it reverses — and
+the motion blur comes from how fast you are genuinely moving it.
+
+**One deliberate limitation.** An inclinometer cannot tell a moving lid from a
+moving laptop — picking the machine up changes pitch too. So by default it only
+supplies *position* for a transition the lid switch has already started; it never
+starts one, which makes a false trigger impossible. Because the switch fires near
+the *end* of the lid's travel, that leaves the closing animation less runway than
+the opening one. Setting `allowInclinometerEarlyClose` to `true` lets detected
+motion start a close instead, which looks considerably better — at the cost of the
+occasional false start when you tilt the machine.
+
+`--debug` shows which tier is active, the live pitch, and the learned range.
 
 ---
 
@@ -222,7 +254,7 @@ src/LidFlow.Core     Platform-neutral: animation model, state machine, easing,
                      configuration, monitor selection. Unit-tested on any OS.
 src/LidFlow.App      Windows: Win32 interop, D3D11/DXGI, DirectComposition
                      overlay, capture backends, tray, settings.
-tests/               127 unit tests over LidFlow.Core.
+tests/               150 unit tests over LidFlow.Core.
 docs/RESEARCH.md     What was established before implementation, with sources,
                      and the platform limits that bound the effect.
 docs/ARCHITECTURE.md Pipeline, module map, state machine, config reference.
@@ -244,7 +276,7 @@ file and re-run. `hingeBias`, `perspectiveStrength`, `maxBlur` and
 
 ## Verification status
 
-- **127 unit tests** over the animation model, state machine, easing, hinge-angle
+- **150 unit tests** over the animation model, state machine, easing, hinge-angle
   mapping, configuration and monitor selection — green.
 - The **whole solution compiles clean**, Windows app included.
 - **CI builds it on a real `windows-latest` runner** with the same

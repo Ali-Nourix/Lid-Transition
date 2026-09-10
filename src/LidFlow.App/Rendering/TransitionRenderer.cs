@@ -208,42 +208,34 @@ internal sealed class TransitionRenderer : IDisposable
             MaxMipLevel = Math.Max(snapshot.MipLevels - 1, 0),
             Progress = frame.Progress,
 
-            ApertureTop = frame.ApertureTop,
-            ApertureBottom = frame.ApertureBottom,
-            SideInset = frame.SideInset,
-            Keystone = frame.Keystone,
+            CosTheta = frame.CosTheta,
+            SinTheta = frame.SinTheta,
+            Perspective = frame.Perspective,
+            PivotV = frame.PivotV,
 
-            HingeY = frame.HingeY,
-            CornerRadius = frame.CornerRadiusPx * ToPanelUnits,
             EdgeSoftness = frame.EdgeSoftnessPx * ToPanelUnits,
-            ShadowExtent = frame.ShadowExtentPx * ToPanelUnits,
-
-            ShadowStrength = frame.ShadowStrength,
             BlurRadius = frame.BlurRadiusPx * ToPanelUnits,
-            BlurExtent = frame.BlurExtentPx * ToPanelUnits,
+            BlurFalloff = frame.BlurFalloff,
             BlackOpacity = frame.BlackOpacity,
 
-            GlareStrength = frame.GlareStrength,
-            GlareOffset = frame.GlareOffsetPx * ToPanelUnits,
-            GlareWidth = frame.GlareWidthPx * ToPanelUnits,
-            WarpStrength = frame.WarpStrength,
-
-            Distortion = frame.DistortionStrength,
+            ShadowStrength = frame.ShadowStrength,
+            ShadowFalloff = frame.ShadowFalloff,
             OffAxisWash = frame.OffAxisWash,
             Luminance = frame.Luminance,
+
+            GlareStrength = frame.GlareStrength,
+            GlareWidth = frame.GlareWidth,
+            Distortion = frame.DistortionStrength,
             EdgeVelocity = frame.EdgeVelocity,
 
             // Amplitude is well under one 8-bit code value; the triangular
             // distribution in the shader is what actually breaks up the banding.
             DitherAmount = ditherEnabled && frame.DitherEnabled ? 1f / 1020f : 0f,
             BlurTaps = frame.BlurTaps,
-            Padding = Vector2.Zero,
-
-            CursorRect = cursor is not null && cursor.HasCursor ? cursor.Rect : Vector4.Zero,
-
             BezelAmbient = frame.BezelAmbient,
             BezelFalloff = frame.BezelFalloffPx * ToPanelUnits,
-            Padding2 = Vector2.Zero,
+
+            CursorRect = cursor is not null && cursor.HasCursor ? cursor.Rect : Vector4.Zero,
         };
 
         MappedSubresource mapped = _graphics.Context.Map(_constantBuffer!, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);

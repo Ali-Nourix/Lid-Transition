@@ -1,5 +1,6 @@
 using System;
 using LidFlow.Core.Animation;
+using LidFlow.Core.Lid;
 
 namespace LidFlow.Core.Configuration;
 
@@ -50,6 +51,38 @@ public sealed class AnimationConfig
     /// </summary>
     public bool UseHingeAngleWhenAvailable { get; set; } = true;
 
+    /// <summary>
+    /// Fall back to a lid-mounted inclinometer when there is no hinge-angle sensor.
+    /// <para>
+    /// The lid switch only reports 0 or 1, so on its own it can say that the lid
+    /// moved but never how far. An inclinometer is in the display on any machine
+    /// with auto-rotate or a tablet mode, so its pitch moves with the lid - and the
+    /// two switch events are enough to calibrate the range. It supplies position
+    /// for a transition the switch has already started; it never starts one, so a
+    /// laptop being picked up cannot trigger the effect.
+    /// </para>
+    /// </summary>
+    public bool UseInclinometerWhenAvailable { get; set; } = true;
+
+    /// <summary>
+    /// Also let the inclinometer <i>start</i> a closing transition, before the lid
+    /// switch fires.
+    /// <para>
+    /// Off by default and best-effort. The switch fires near the end of the lid's
+    /// travel, so waiting for it leaves very little of the close visible; starting
+    /// from detected motion gives the animation real runway. The cost is that an
+    /// inclinometer cannot distinguish a moving lid from a moving laptop, so
+    /// tilting the machine can trigger it.
+    /// </para>
+    /// </summary>
+    public bool AllowInclinometerEarlyClose { get; set; }
+
+    /// <summary>
+    /// Learned inclinometer range, persisted so the first close after a restart
+    /// does not have to fall back to the timed path.
+    /// </summary>
+    public LidAngleCalibration InclinometerCalibration { get; set; } = new();
+
     /// <summary>Hinge angle at or below which the panel counts as fully closed.</summary>
     public float HingeClosedAngleDeg { get; set; } = 4f;
 
@@ -72,80 +105,87 @@ public sealed class AnimationConfig
     public int OpenDurationMs { get; set; } = 285;
 
     /// <summary>
-    /// Normalized Y where the aperture converges, i.e. the projected hinge line.
-    /// 0.5 would be a symmetric iris; below-centre values make the top edge travel further
-    /// and faster than the bottom, which is what reads as a panel rotating about a hinge
-    /// below the screen rather than a shrinking rectangle.
+    /// Total rotation the panel sweeps through, in degrees, from flat against the
+    /// display to fully closed.
+    /// <para>
+    /// At 90 degrees the panel ends edge-on, covering nothing, which is what makes
+    /// the final frame pure black by construction rather than by fading.
+    /// </para>
     /// </summary>
-    public float HingeBias { get; set; } = 0.62f;
-
-    /// <summary>How far the side edges close in, as a fraction of panel width (total, both sides).</summary>
-    public float EdgeExpansion { get; set; } = 0.13f;
-
-    /// <summary>Normalized progress before the side edges start moving. Keeps the early
-    /// part of the motion dominated by the top/bottom edges.</summary>
-    public float SideDelay { get; set; } = 0.18f;
+    public float PanelMaxAngleDeg { get; set; } = 90f;
 
     /// <summary>
-    /// Drives the trapezoidal narrowing of the aperture toward the top (keystone) — the
-    /// geometric signature of a surface tilting away from the viewer.
+    /// Reciprocal viewing distance, in panel heights, used by the projection.
+    /// <para>
+    /// This is the strength of the keystone - how much more the top of the panel
+    /// narrows than the bottom - and it is the main cue that the panel is rotating
+    /// rather than scaling. 0 gives an orthographic squash with no convergence.
+    /// </para>
     /// </summary>
     public float PerspectiveStrength { get; set; } = 0.85f;
+
+    /// <summary>
+    /// How far below the visible panel the hinge actually sits, in panel heights.
+    /// <para>
+    /// A real hinge is behind the bottom bezel rather than on the last row of
+    /// pixels, so the bottom edge foreshortens slightly too instead of being
+    /// pinned dead still.
+    /// </para>
+    /// </summary>
+    public float HingeOffset { get; set; } = 0.05f;
 
     /// <summary>Antialias/soft width of the panel edge itself.</summary>
     public float EdgeSoftness { get; set; } = 2.6f;
 
-    /// <summary>Corner rounding of the aperture at full close. Grows with progress.</summary>
-    public float CornerRadiusPx { get; set; } = 30f;
-
-    /// <summary>Distance inside the edge over which luminance falls off toward black.</summary>
-    public float ShadowExtentPx { get; set; } = 155f;
-
-    /// <summary>Depth of that luminance falloff. 0 disables the gradient, leaving a hard edge.</summary>
-    public float ShadowStrength { get; set; } = 0.88f;
-
-    /// <summary>Peak blur radius reached immediately behind the moving edge.</summary>
-    public float MaxBlur { get; set; } = 34f;
-
-    /// <summary>Distance inside the edge over which blur ramps from zero to <see cref="MaxBlur"/>.</summary>
-    public float BlurRadius { get; set; } = 175f;
+    /// <summary>
+    /// Peak blur radius, reached at the panel's far (top) edge.
+    /// <para>
+    /// Blur is not uniform and not edge-localized: it scales with distance from
+    /// the hinge, because that is proportional to how fast that row is actually
+    /// moving. The hinge edge stays sharp.
+    /// </para>
+    /// </summary>
+    public float MaxBlur { get; set; } = 56f;
 
     /// <summary>
-    /// How much the blur is gated by the edge's instantaneous speed (0..1). At 1 the blur
-    /// exists only while the edge is actually moving, which is what makes it read as
-    /// optical motion rather than a defocus fade.
+    /// Exponent shaping the blur gradient along the panel. 1 is linear in distance
+    /// from the hinge; above 1 concentrates the blur toward the far edge.
+    /// </summary>
+    public float BlurFalloff { get; set; } = 1.15f;
+
+    /// <summary>
+    /// How much the blur is gated by rotation speed (0..1). At 1 the blur exists
+    /// only while the panel is actually moving, which is what makes it read as
+    /// motion rather than defocus.
     /// </summary>
     public float BlurVelocityInfluence { get; set; } = 0.72f;
 
-    /// <summary>Opacity of the occluded region. 1.0 is fully black; lower values are for tuning only.</summary>
+    /// <summary>Opacity of the region the panel no longer covers. 1.0 is fully black.</summary>
     public float BlackOpacity { get; set; } = 1.0f;
 
-    /// <summary>Strength of the faint highlight that sweeps just inside the closing edge.</summary>
+    /// <summary>Depth of the luminance falloff toward the panel's far edge.</summary>
+    public float ShadowStrength { get; set; } = 0.55f;
+
+    /// <summary>Exponent shaping that falloff along the panel.</summary>
+    public float ShadowFalloff { get; set; } = 1.6f;
+
+    /// <summary>Strength of the highlight running along the panel's leading edge.</summary>
     public float GlareStrength { get; set; } = 0.055f;
 
-    /// <summary>Distance inside the edge at which the highlight peaks.</summary>
-    public float GlareOffsetPx { get; set; } = 26f;
+    /// <summary>Width of that highlight, as a fraction of the panel's length.</summary>
+    public float GlareWidth { get; set; } = 0.10f;
 
-    /// <summary>Width of the highlight band.</summary>
-    public float GlareWidthPx { get; set; } = 62f;
-
-    /// <summary>
-    /// Edge-localized coordinate pull toward the hinge. Small on purpose: the centre of the
-    /// snapshot must stay pixel-stable, so this is shaped to vanish away from the edges.
-    /// </summary>
-    public float WarpStrength { get; set; } = 0.030f;
-
-    /// <summary>Scales the subtle optical (barrel) term applied near the moving edge.</summary>
+    /// <summary>Scales a subtle optical (glass) term near the far edge.</summary>
     public float DistortionStrength { get; set; } = 0.5f;
 
-    /// <summary>Contrast/saturation loss far from the hinge, mimicking off-axis LCD viewing.</summary>
+    /// <summary>Contrast and saturation loss toward the far edge, from off-axis viewing.</summary>
     public float OffAxisWash { get; set; } = 0.35f;
 
     /// <summary>Overall luminance loss at full close, before occlusion.</summary>
     public float GlobalDim { get; set; } = 0.10f;
 
     /// <summary>
-    /// Ambient light the panel bezel picks up, just outside the aperture.
+    /// Ambient light the panel bezel picks up, just outside the panel edge.
     /// <para>
     /// Small but load-bearing: a mathematically perfect black boundary reads as a
     /// hole cut in the image, whereas a faint brightening against the glass reads
@@ -154,7 +194,7 @@ public sealed class AnimationConfig
     /// </summary>
     public float BezelAmbient { get; set; } = 0.010f;
 
-    /// <summary>Distance outside the edge over which the bezel ambient decays.</summary>
+    /// <summary>Distance outside the panel edge over which the bezel ambient decays.</summary>
     public float BezelFalloffPx { get; set; } = 22f;
 
     public bool EnableBlur { get; set; } = true;
@@ -184,40 +224,47 @@ public sealed class AnimationConfig
         CloseDurationMs = Clamp(CloseDurationMs, 80, 2000);
         OpenDurationMs = Clamp(OpenDurationMs, 80, 2000);
 
-        HingeBias = Clamp(HingeBias, 0.05f, 0.95f);
+        PanelMaxAngleDeg = Clamp(PanelMaxAngleDeg, 5f, 179f);
+        PerspectiveStrength = Clamp(PerspectiveStrength, 0f, 4f);
+        HingeOffset = Clamp(HingeOffset, 0f, 1f);
 
         HingeClosedAngleDeg = Clamp(HingeClosedAngleDeg, 0f, 170f);
         HingeOpenAngleDeg = Clamp(HingeOpenAngleDeg, 1f, 180f);
 
-        // An inverted or collapsed angle range would make the mapping meaningless,
-        // so keep at least a degree of travel between the two.
+        // An inverted or collapsed angle range would make the mapping
+        // meaningless, so keep at least a degree of travel between the two.
         if (HingeOpenAngleDeg <= HingeClosedAngleDeg)
         {
             HingeOpenAngleDeg = Clamp(HingeClosedAngleDeg + 1f, 1f, 180f);
         }
 
         HingeVelocityReference = Clamp(HingeVelocityReference, 0.1f, 50f);
-        EdgeExpansion = Clamp(EdgeExpansion, 0f, 0.9f);
-        SideDelay = Clamp(SideDelay, 0f, 0.9f);
-        PerspectiveStrength = Clamp(PerspectiveStrength, 0f, 3f);
+
+        InclinometerCalibration ??= new LidAngleCalibration();
+
+        // A persisted calibration whose range is implausible is worse than none:
+        // it would drive the animation from a mapping that never applied.
+        double sweep = Math.Abs(InclinometerCalibration.ClosedPitchDegrees - InclinometerCalibration.OpenPitchDegrees);
+        if (InclinometerCalibration.IsValid &&
+            (sweep < LidAngleTracker.MinimumPlausibleSweepDegrees || sweep > LidAngleTracker.MaximumPlausibleSweepDegrees))
+        {
+            InclinometerCalibration.IsValid = false;
+        }
 
         EdgeSoftness = Clamp(EdgeSoftness, 0.5f, 64f);
-        CornerRadiusPx = Clamp(CornerRadiusPx, 0f, 400f);
 
-        ShadowExtentPx = Clamp(ShadowExtentPx, 0f, 900f);
-        ShadowStrength = Clamp(ShadowStrength, 0f, 1f);
-
-        MaxBlur = Clamp(MaxBlur, 0f, 200f);
-        BlurRadius = Clamp(BlurRadius, 1f, 1200f);
+        MaxBlur = Clamp(MaxBlur, 0f, 400f);
+        BlurFalloff = Clamp(BlurFalloff, 0.05f, 8f);
         BlurVelocityInfluence = Clamp(BlurVelocityInfluence, 0f, 1f);
 
         BlackOpacity = Clamp(BlackOpacity, 0f, 1f);
 
-        GlareStrength = Clamp(GlareStrength, 0f, 1f);
-        GlareOffsetPx = Clamp(GlareOffsetPx, 0f, 600f);
-        GlareWidthPx = Clamp(GlareWidthPx, 1f, 600f);
+        ShadowStrength = Clamp(ShadowStrength, 0f, 1f);
+        ShadowFalloff = Clamp(ShadowFalloff, 0.05f, 8f);
 
-        WarpStrength = Clamp(WarpStrength, 0f, 0.5f);
+        GlareStrength = Clamp(GlareStrength, 0f, 1f);
+        GlareWidth = Clamp(GlareWidth, 0.001f, 1f);
+
         DistortionStrength = Clamp(DistortionStrength, 0f, 4f);
         OffAxisWash = Clamp(OffAxisWash, 0f, 1f);
         GlobalDim = Clamp(GlobalDim, 0f, 1f);
@@ -239,27 +286,26 @@ public sealed class AnimationConfig
     {
         EnableAnimation = EnableAnimation,
         UseHingeAngleWhenAvailable = UseHingeAngleWhenAvailable,
+        UseInclinometerWhenAvailable = UseInclinometerWhenAvailable,
+        AllowInclinometerEarlyClose = AllowInclinometerEarlyClose,
+        InclinometerCalibration = (InclinometerCalibration ?? new LidAngleCalibration()).Clone(),
         HingeClosedAngleDeg = HingeClosedAngleDeg,
         HingeOpenAngleDeg = HingeOpenAngleDeg,
         HingeVelocityReference = HingeVelocityReference,
         CloseDurationMs = CloseDurationMs,
         OpenDurationMs = OpenDurationMs,
-        HingeBias = HingeBias,
-        EdgeExpansion = EdgeExpansion,
-        SideDelay = SideDelay,
+        PanelMaxAngleDeg = PanelMaxAngleDeg,
         PerspectiveStrength = PerspectiveStrength,
+        HingeOffset = HingeOffset,
         EdgeSoftness = EdgeSoftness,
-        CornerRadiusPx = CornerRadiusPx,
-        ShadowExtentPx = ShadowExtentPx,
-        ShadowStrength = ShadowStrength,
         MaxBlur = MaxBlur,
-        BlurRadius = BlurRadius,
+        BlurFalloff = BlurFalloff,
         BlurVelocityInfluence = BlurVelocityInfluence,
         BlackOpacity = BlackOpacity,
+        ShadowStrength = ShadowStrength,
+        ShadowFalloff = ShadowFalloff,
         GlareStrength = GlareStrength,
-        GlareOffsetPx = GlareOffsetPx,
-        GlareWidthPx = GlareWidthPx,
-        WarpStrength = WarpStrength,
+        GlareWidth = GlareWidth,
         DistortionStrength = DistortionStrength,
         OffAxisWash = OffAxisWash,
         GlobalDim = GlobalDim,

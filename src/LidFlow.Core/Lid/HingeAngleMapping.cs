@@ -30,11 +30,12 @@ public static class HingeAngleMapping
     /// Maps a hinge angle to panel progress, where 0 is fully open and 1 is fully
     /// closed.
     /// <para>
-    /// The mapping is by the sine of the angle, not the angle itself, because that
-    /// is what the geometry does: a panel rotating about its hinge presents a
-    /// projected height proportional to sin(angle) to a viewer in front of it. A
-    /// linear mapping would make the aperture close at a constant rate while the
-    /// real panel accelerated away, and the mismatch is visible.
+    /// The mapping is linear in the angle, and deliberately so: the panel is
+    /// rendered as a real rectangle rotated by that angle and projected, so all
+    /// the trigonometry lives in the projection where it belongs. Progress here is
+    /// just "how far through its travel the hinge is", which is exactly what the
+    /// sensor reports. Curving it here as well would double-apply the geometry and
+    /// make the image lag the physical panel.
     /// </para>
     /// </summary>
     public static float ProgressFromAngle(
@@ -53,29 +54,10 @@ public static class HingeAngleMapping
             openAngleDegrees = closedAngleDegrees + 1f;
         }
 
-        if (angleDegrees <= closedAngleDegrees)
-        {
-            return 1f;
-        }
+        double span = openAngleDegrees - closedAngleDegrees;
+        double open = (angleDegrees - closedAngleDegrees) / span;
 
-        if (angleDegrees >= openAngleDegrees)
-        {
-            return 0f;
-        }
-
-        double closedSine = Math.Sin(DegreesToRadians(closedAngleDegrees));
-        double openSine = Math.Sin(DegreesToRadians(openAngleDegrees));
-        double span = openSine - closedSine;
-
-        if (span <= 1e-6)
-        {
-            return angleDegrees <= closedAngleDegrees ? 1f : 0f;
-        }
-
-        double current = Math.Sin(DegreesToRadians(angleDegrees));
-        double visible = (current - closedSine) / span;
-
-        return (float)Math.Clamp(1d - visible, 0d, 1d);
+        return (float)Math.Clamp(1d - open, 0d, 1d);
     }
 
     /// <summary>

@@ -10,7 +10,7 @@ namespace LidFlow.App.Rendering;
 /// The field order here must match the shader exactly. It is arranged so that no
 /// member straddles a 16-byte boundary, which is what HLSL's packing rules
 /// require and what makes a plain sequential layout correct without any explicit
-/// padding between groups. Total size is 176 bytes: eleven float4 registers.
+/// padding between groups.
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -29,49 +29,39 @@ internal struct TransitionConstants
     public float MaxMipLevel;
     public float Progress;
 
-    // register c3
-    public float ApertureTop;
-    public float ApertureBottom;
-    public float SideInset;
-    public float Keystone;
+    // register c3 - panel geometry
+    public float CosTheta;
+    public float SinTheta;
+    public float Perspective;
+    public float PivotV;
 
     // register c4
-    public float HingeY;
-    public float CornerRadius;
     public float EdgeSoftness;
-    public float ShadowExtent;
+    public float BlurRadius;
+    public float BlurFalloff;
+    public float BlackOpacity;
 
     // register c5
     public float ShadowStrength;
-    public float BlurRadius;
-    public float BlurExtent;
-    public float BlackOpacity;
+    public float ShadowFalloff;
+    public float OffAxisWash;
+    public float Luminance;
 
     // register c6
     public float GlareStrength;
-    public float GlareOffset;
     public float GlareWidth;
-    public float WarpStrength;
-
-    // register c7
     public float Distortion;
-    public float OffAxisWash;
-    public float Luminance;
     public float EdgeVelocity;
 
-    // register c8
+    // register c7
     public float DitherAmount;
     public float BlurTaps;
-    public Vector2 Padding;
-
-    // register c9
-    public Vector4 CursorRect;
-
-    // register c10
     public float BezelAmbient;
     public float BezelFalloff;
-    public Vector2 Padding2;
+
+    // register c8
+    public Vector4 CursorRect;
 
     /// <summary>Expected size in bytes. Asserted at startup against the real size.</summary>
-    public const int ExpectedSize = 176;
+    public const int ExpectedSize = 144;
 }

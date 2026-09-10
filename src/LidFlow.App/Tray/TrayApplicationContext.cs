@@ -205,6 +205,48 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// Saves the inclinometer calibration learned this session.
+    /// <para>
+    /// Worth persisting because it is learned from real lid events: discarding it
+    /// would mean the first close after every launch fell back to the timed path,
+    /// even on a machine that had already taught it the pitch range.
+    /// </para>
+    /// </summary>
+    private void PersistLearnedCalibration()
+    {
+        LidAngleCalibration? learned = _controller.LearnedCalibration;
+
+        if (learned is null || !learned.IsValid)
+        {
+            return;
+        }
+
+        LidAngleCalibration stored = _config.Animation.InclinometerCalibration;
+
+        // Only write when it actually changed, so shutting down does not rewrite
+        // config.json every time.
+        bool unchanged = stored.IsValid
+            && Math.Abs(stored.OpenPitchDegrees - learned.OpenPitchDegrees) < 0.5d
+            && Math.Abs(stored.ClosedPitchDegrees - learned.ClosedPitchDegrees) < 0.5d;
+
+        if (unchanged)
+        {
+            return;
+        }
+
+        _config.Animation.InclinometerCalibration = learned;
+
+        if (ConfigStore.TrySave(AppPaths.ConfigFile, _config, out string? error))
+        {
+            _log.Info($"Saved the learned lid calibration ({learned.ClosedPitchDegrees - learned.OpenPitchDegrees:0.#} deg sweep).");
+        }
+        else
+        {
+            _log.Warn($"Could not save the learned lid calibration: {error}");
+        }
+    }
+
     private void ApplyDebugHud()
     {
         bool wanted = _config.Diagnostics.ShowDebugHud;
@@ -246,6 +288,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _disposed = true;
 
             _log.Info("LidFlow shutting down.");
+
+            PersistLearnedCalibration();
 
             // Order matters: stop listening before tearing down what the events
             // would touch.

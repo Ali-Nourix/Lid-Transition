@@ -1,24 +1,37 @@
 //=============================================================================
 // LidFlow - lid transition shader
 //
-// One pass. Input is the frozen desktop snapshot (with a full mip chain); output
-// is the composited frame for the overlay swap chain.
+// One pass. Input is the frozen desktop snapshot (with a full mip chain);
+// output is the composited frame for the overlay swap chain.
 //
-// The illusion this implements is "the panel closes around the content", not
-// "the screenshot shrinks". The snapshot is sampled at (very nearly) its own
-// coordinates throughout; what changes is the aperture through which it is
-// visible, and the optical treatment of the pixels near the aperture's moving
-// edge.
+// THE MODEL
+// ---------
+// The panel is treated as a real rectangle hinged along its bottom edge and
+// rotating away from the viewer. The desktop image is painted ON that
+// rectangle, so it does not move independently: what changes is where the
+// rectangle projects to on screen. At zero rotation the projection is exactly
+// the identity - the panel lands precisely on the physical display and the frame
+// is pixel-identical to the captured desktop.
+//
+// Everything else follows from that one idea rather than being layered on:
+//
+//   * Black grows from the top and the top corners, because that is where the
+//     foreshortened, keystoned panel no longer covers the screen.
+//   * Blur is strongest at the top and fades to nothing at the hinge, because a
+//     point's speed is proportional to its distance from the hinge. The hinge
+//     edge barely moves, so it stays sharp.
+//   * The top loses contrast first, because it is the most off-axis.
 //
 // Coordinate spaces
 // -----------------
-//   uv     : [0,1]^2 across the panel, y down.
-//   panel  : uv with x scaled by the aspect ratio, so one unit is one panel
-//            HEIGHT in both axes. Every distance, radius and softness below is
-//            in panel units, which is why the effect is resolution- and
-//            DPI-independent: the host converts its reference pixels (authored
-//            against a 1080-tall panel) by dividing by 1080, and nothing else
-//            in the pipeline depends on the real pixel count.
+//   uv      : [0,1]^2 across the physical display, y down.
+//   content : [0,1]^2 across the captured desktop.
+//   s       : position along the panel measured from the hinge. 0 at the hinge
+//             edge, 1 at the far (top) edge. This is the natural variable for
+//             the whole effect and nearly everything below is a function of it.
+//   panel   : uv with x scaled by the aspect ratio, so one unit is one display
+//             HEIGHT in both axes. Every radius and softness is in these units,
+//             which is why the effect is resolution- and DPI-independent.
 //
 // Colour
 // ------
@@ -26,60 +39,51 @@
 // target is an _SRGB view too, so texture reads arrive linear and writes are
 // re-encoded by the hardware. All the darkening below therefore happens in
 // linear light, which is the difference between a panel dimming and a muddy
-// grey wash. On an HDR output the surfaces are already linear scRGB and the
-// same code is correct unchanged.
+// grey wash.
 //=============================================================================
 
 cbuffer TransitionParams : register(b0)
 {
     // --- panel / sampling -------------------------------------------------
     float2 SnapshotTexelSize;   // 1 / snapshot dimensions
-    float  Aspect;              // panel width / height
-    float  PanelHeightPx;       // real panel height, for mip selection only
+    float  Aspect;              // display width / height
+    float  PanelHeightPx;       // real display height, for mip selection
 
     float4 UvTransform;         // 2x2 matrix (a,b,c,d) handling display rotation
     float2 UvOffset;            // translation that goes with UvTransform
     float  MaxMipLevel;
     float  Progress;            // 0 = open, 1 = closed
 
-    // --- aperture geometry ------------------------------------------------
-    float  ApertureTop;         // uv.y of the top edge (negative when fully open)
-    float  ApertureBottom;      // uv.y of the bottom edge (> 1 when fully open)
-    float  SideInset;           // per-side inset at the hinge line, fraction of width
-    float  Keystone;            // extra per-side inset at the aperture top
-
-    float  HingeY;              // uv.y of the projected hinge line
-    float  CornerRadius;        // panel units
-    float  EdgeSoftness;        // panel units
-    float  ShadowExtent;        // panel units
+    // --- panel geometry ---------------------------------------------------
+    float  CosTheta;            // cos of the rotation away from the viewer
+    float  SinTheta;
+    float  Perspective;         // 1 / viewing distance, in panel heights
+    float  PivotV;              // uv.y of the projected hinge (>= 1: below the screen)
 
     // --- optical treatment -------------------------------------------------
-    float  ShadowStrength;
-    float  BlurRadius;          // panel units, already gated by edge speed
-    float  BlurExtent;          // panel units
+    float  EdgeSoftness;        // panel units
+    float  BlurRadius;          // panel units, at the far edge, velocity-gated
+    float  BlurFalloff;          // exponent shaping blur along s
     float  BlackOpacity;
 
-    float  GlareStrength;
-    float  GlareOffset;         // panel units
-    float  GlareWidth;          // panel units
-    float  WarpStrength;
-
-    float  Distortion;
+    float  ShadowStrength;
+    float  ShadowFalloff;       // exponent shaping the dim along s
     float  OffAxisWash;
     float  Luminance;
+
+    float  GlareStrength;
+    float  GlareWidth;          // in s units, measured in from the far edge
+    float  Distortion;
     float  EdgeVelocity;
 
     float  DitherAmount;
     float  BlurTaps;
-    float2 Padding;
-
-    // Cursor placement in snapshot UV space: xy = top-left, zw = size.
-    // A zero size means "no separate cursor to draw".
-    float4 CursorRect;
-
     float  BezelAmbient;
     float  BezelFalloff;        // panel units
-    float2 Padding2;
+
+    // Cursor placement in content UV space: xy = top-left, zw = size.
+    // A zero size means "no separate cursor to draw".
+    float4 CursorRect;
 };
 
 Texture2D<float4> Snapshot : register(t0);
@@ -99,7 +103,7 @@ VsOut FullscreenVS(uint vertexId : SV_VertexID)
 {
     // (-1,-1), (-1,3), (3,-1) covers the viewport with one triangle; the
     // hardware clips the excess, which is cheaper than a quad and avoids the
-    // diagonal seam that a two-triangle quad can show under some drivers.
+    // diagonal seam a two-triangle quad can show under some drivers.
     float2 position = float2((vertexId == 2) ? 3.0 : -1.0,
                              (vertexId == 1) ? 3.0 : -1.0);
 
@@ -110,60 +114,66 @@ VsOut FullscreenVS(uint vertexId : SV_VertexID)
 }
 
 //-----------------------------------------------------------------------------
-// Aperture signed distance field.
+// Inverse projection: screen point -> position on the rotating panel.
 //
-// A rounded box whose half-width varies with y. Evaluating a y-dependent
-// half-width inside a box SDF is an approximation to a true rounded-trapezoid
-// SDF, but the keystone is a few percent of the width, so the error is far
-// below the softness band it feeds and it buys a closed form that is stable
-// everywhere, including after the aperture collapses to zero height.
+// Side view, with the hinge at the origin, the viewer along +y and depth along
+// +z. A point at distance s along the panel sits at
 //
-// Returns the signed distance in PANEL units, negative inside the aperture.
+//     height  y(s) = s * cos(theta)
+//     depth   z(s) = s * sin(theta)
+//
+// A pinhole projection with k = 1 / viewing distance divides by (1 + z*k), so
+// its projected height above the hinge is
+//
+//     screenT(s) = s * cos(theta) / (1 + s * sin(theta) * k)
+//
+// which inverts in closed form:
+//
+//     s = screenT / (cos(theta) - screenT * sin(theta) * k)
+//
+// The same divisor widens the panel's projected width, which is the keystone:
+// rows further up are narrower on screen, so screen pixels beyond them fall off
+// the panel and read as black. At theta = 0 this is exactly the identity.
+//
+// Returns false when the row is past the horizon, where the projection has no
+// solution and the correct answer is simply "not on the panel".
 //-----------------------------------------------------------------------------
-float ApertureSdf(float2 uv)
+bool ProjectToPanel(float2 uv, out float2 content, out float s)
 {
-    // How far above the hinge we are, 0 at the hinge and 1 at the top of the
-    // panel. Below the hinge the aperture keeps its full width: that edge is
-    // the one closest to the viewer, so it is not foreshortened.
-    float aboveHinge = saturate((HingeY - uv.y) / max(HingeY, 1e-5));
-    float inset = SideInset + (Keystone * aboveHinge);
+    content = uv;
+    s = 0.0;
 
-    float halfWidth = max(0.5 - inset, 0.0) * Aspect;
-    float halfHeight = max((ApertureBottom - ApertureTop) * 0.5, 0.0);
-    float centreY = (ApertureBottom + ApertureTop) * 0.5;
+    float pivot = max(PivotV, 1e-4);
 
-    // Corner radius can never exceed the smaller half-extent, or the SDF
-    // inverts and the aperture blows up as it collapses.
-    float radius = min(CornerRadius, min(halfWidth, halfHeight));
+    // Height above the projected hinge, normalized so that a fully-open panel
+    // maps the whole display to s in [0,1].
+    float screenT = (pivot - uv.y) / pivot;
 
-    float2 offset = float2((uv.x - 0.5) * Aspect, uv.y - centreY);
-    float2 q = abs(offset) - float2(halfWidth, halfHeight) + radius;
+    float denom = CosTheta - (screenT * SinTheta * Perspective);
 
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
-}
+    if (denom <= 1e-4)
+    {
+        return false;
+    }
 
-//-----------------------------------------------------------------------------
-// Outward normal of the aperture boundary, by central difference.
-//
-// Differentiating numerically rather than by hand keeps the normal consistent
-// with the approximated trapezoid SDF above (an analytic box normal would
-// disagree with it in the keystoned region) and costs four cheap evaluations.
-//-----------------------------------------------------------------------------
-float2 ApertureNormal(float2 uv)
-{
-    const float h = 1.0 / 512.0;
-    float2 delta = float2(h / max(Aspect, 1e-5), h);
+    s = screenT / denom;
 
-    float dx = ApertureSdf(uv + float2(delta.x, 0.0)) - ApertureSdf(uv - float2(delta.x, 0.0));
-    float dy = ApertureSdf(uv + float2(0.0, delta.y)) - ApertureSdf(uv - float2(0.0, delta.y));
+    // Rows further from the hinge are further away, so they are compressed on
+    // screen by exactly this factor - and therefore expanded when going the
+    // other way, from screen to content.
+    float widen = 1.0 + (s * SinTheta * Perspective);
 
-    return normalize(float2(dx, dy) + float2(1e-7, 1e-7));
+    content = float2(
+        0.5 + ((uv.x - 0.5) * widen),
+        pivot * (1.0 - s));
+
+    return true;
 }
 
 //-----------------------------------------------------------------------------
 // Interleaved gradient noise. Used for dithering, and deliberately a function
-// of pixel position only: a noise pattern that changed per frame would crawl
-// visibly across the wide dark gradients this effect is made of.
+// of pixel position only: a pattern that changed per frame would crawl visibly
+// across the wide dark gradients this effect is made of.
 //-----------------------------------------------------------------------------
 float InterleavedGradientNoise(float2 pixel)
 {
@@ -173,31 +183,32 @@ float InterleavedGradientNoise(float2 pixel)
 //-----------------------------------------------------------------------------
 // Directional, per-pixel-variable blur.
 //
-// The blur direction is the aperture normal, so it smears along the direction
-// the edge is travelling; the radius comes from the animation model, which
-// gates it on the edge's instantaneous speed. Wide radii are served by the
-// snapshot's mip chain rather than by more taps, which keeps a 4K frame at a
-// fixed, small cost regardless of how much blur is asked for.
+// The radius comes from the panel position: a point s along the panel moves at
+// a speed proportional to s, so the far edge smears and the hinge edge does
+// not. The direction is the screen-space direction that panel motion projects
+// to, which is essentially vertical.
+//
+// Wide radii are served by the snapshot's mip chain rather than by more taps,
+// which keeps a 4K frame at a fixed, small cost however much blur is asked for.
 //-----------------------------------------------------------------------------
-float3 SampleBlurred(float2 uv, float2 direction, float radiusPanel)
+float3 SampleBlurred(float2 content, float2 direction, float radiusPanel)
 {
     if (radiusPanel <= 1e-5)
     {
-        return Snapshot.SampleLevel(LinearClamp, uv, 0.0).rgb;
+        return Snapshot.SampleLevel(LinearClamp, content, 0.0).rgb;
     }
 
     // Guarded: a zero or negative tap count would divide the accumulated weight
-    // by nothing and return black, which on screen would look like a hole rather
-    // than an error.
+    // by nothing and return black, which would look like a hole rather than an
+    // error.
     int taps = max((int)BlurTaps, 1);
     float radiusPixels = radiusPanel * PanelHeightPx;
 
-    // Choose the mip whose texels are about as wide as the gap between taps,
-    // so the kernel stays gap-free instead of banding into visible copies.
+    // Choose the mip whose texels are about as wide as the gap between taps, so
+    // the kernel stays gap-free instead of banding into visible copies.
     float spacing = max(radiusPixels / max(taps * 0.5, 1.0), 1.0);
     float lod = clamp(log2(spacing), 0.0, MaxMipLevel);
 
-    // Direction in uv space; x is compressed because uv.x spans the wider axis.
     float2 offset = direction * radiusPanel * float2(1.0 / max(Aspect, 1e-5), 1.0);
 
     float3 sum = 0.0;
@@ -208,8 +219,8 @@ float3 SampleBlurred(float2 uv, float2 direction, float radiusPanel)
     for (int i = 0; i < taps; i++)
     {
         float t = (i - halfSpan) / max(halfSpan, 1.0);   // -1 .. 1
-        float weight = exp(-2.2 * t * t);             // Gaussian-ish falloff
-        sum += Snapshot.SampleLevel(LinearClamp, uv + (offset * t), lod).rgb * weight;
+        float weight = exp(-2.2 * t * t);                // Gaussian-ish falloff
+        sum += Snapshot.SampleLevel(LinearClamp, content + (offset * t), lod).rgb * weight;
         weightSum += weight;
     }
 
@@ -223,23 +234,31 @@ float4 TransitionPS(VsOut input) : SV_Target
 {
     float2 uv = input.Uv;
 
-    float signedDistance = ApertureSdf(uv);
-    float distanceInside = -signedDistance;             // positive inside the aperture
+    float2 content;
+    float s;
+    bool onPanel = ProjectToPanel(uv, content, s);
 
-    // Everything outside the panel edge is occluded; bail out before doing any
-    // sampling work at all. Once the aperture has collapsed this is the whole
-    // screen, so the final held-black frame costs essentially nothing.
-    float edgeMask = smoothstep(0.0, max(EdgeSoftness, 1e-5), distanceInside);
-    float occlusion = lerp(1.0, edgeMask, saturate(BlackOpacity));
+    // --- how far inside the panel this pixel is ---------------------------
+    // Measured in panel units so the softness is the same on every axis, and
+    // antialiased with the screen-space derivative so the edge stays crisp
+    // however strongly the projection is compressing that region - a fixed
+    // softness would smear badly near the horizon.
+    float insideX = min(content.x, 1.0 - content.x) * Aspect;
+    float insideY = min(content.y, 1.0 - content.y);
+    float inside = min(insideX, insideY);
+
+    float derivative = clamp(fwidth(inside), 1e-6, 0.05);
+    float softness = max(EdgeSoftness, derivative);
+
+    float coverage = onPanel ? smoothstep(0.0, softness, inside) : 0.0;
+    float occlusion = lerp(1.0, coverage, saturate(BlackOpacity));
 
     // --- bezel ambient -----------------------------------------------------
-    // A real panel's bezel is not a void: it picks up a little ambient light,
-    // brightest right against the glass. Without this the boundary between
-    // content and black is mathematically perfect and reads as drawn rather than
-    // physical - it is the difference between an occluding object and a hole cut
-    // in the image. Kept far below the content's own luminance so it never looks
-    // like a glow effect.
-    float outside = max(-distanceInside, 0.0);
+    // A real bezel is not a void: it picks up a little ambient light, brightest
+    // right against the glass. Without this the boundary between content and
+    // black is mathematically perfect and reads as a hole cut in the image
+    // rather than an object occluding it.
+    float outside = max(-inside, 0.0);
     float bezel = BezelAmbient * exp(-outside / max(BezelFalloff, 1e-5));
 
     if (occlusion <= 0.0009 && bezel <= 0.0006)
@@ -247,39 +266,35 @@ float4 TransitionPS(VsOut input) : SV_Target
         return float4(0.0, 0.0, 0.0, 1.0);
     }
 
-    // How close this pixel is to the moving edge, 1 at the edge and 0 deep in
-    // the middle. Every optical term is scaled by this, which is what keeps the
-    // centre of the frame stable while the edges do the moving.
-    float edgeInfluence = 1.0 - smoothstep(0.0, max(BlurExtent, 1e-5), distanceInside);
+    // Distance along the panel, clamped: this drives every optical term below.
+    float along = saturate(s);
 
-    float2 normal = ApertureNormal(uv);
-
-    // --- sample-coordinate warp ------------------------------------------
-    // Pushing the sample coordinate away from the hinge compresses the image
-    // toward it, which is the foreshortening a tilting panel would produce.
-    // Shaped by edgeInfluence so the middle of the frame stays pixel-stable.
-    float2 warped = uv;
-    warped.y = HingeY + ((warped.y - HingeY) * (1.0 + (WarpStrength * edgeInfluence)));
-
-    // A touch of outward refraction just inside the edge, as if through the
-    // panel's own glass. Quadratic so it is confined to the last few percent.
-    warped += normal * (Distortion * edgeInfluence * edgeInfluence * 0.004);
+    // --- optical distortion ------------------------------------------------
+    // A touch of outward refraction toward the far edge, as if through the
+    // panel's own glass. Quadratic, so it is confined to the last few percent.
+    float2 sampleContent = content;
+    sampleContent.y -= Distortion * along * along * 0.004;
 
     // Display rotation. Desktop Duplication always hands back an un-rotated
     // surface with the desktop rotated inside it, so the correction happens
     // here rather than by re-orienting the texture on the CPU.
-    float2 sampleUv = float2(dot(warped, UvTransform.xy), dot(warped, UvTransform.zw)) + UvOffset;
+    float2 sampleUv = float2(
+        dot(sampleContent, UvTransform.xy),
+        dot(sampleContent, UvTransform.zw)) + UvOffset;
 
     // --- content ----------------------------------------------------------
-    float radius = BlurRadius * edgeInfluence;
-    float3 colour = SampleBlurred(sampleUv, normal, radius);
+    // Blur grows with distance from the hinge. The exponent lets the falloff be
+    // shaped without changing where it starts or ends.
+    float radius = BlurRadius * pow(along, max(BlurFalloff, 0.05));
+
+    // Panel motion projects to very nearly straight up and down on screen.
+    float3 colour = SampleBlurred(sampleUv, float2(0.0, 1.0), radius);
 
     // --- pointer ----------------------------------------------------------
     // When the driver draws the pointer on a hardware plane it is absent from
     // the captured desktop, so it has to be composited back in - otherwise the
     // cursor would vanish on the transition's very first frame, which is exactly
-    // the kind of mismatch that gives the illusion away. Sampled at the same
-    // warped coordinate as the content so it moves with it.
+    // the kind of mismatch that gives the illusion away.
     if (CursorRect.z > 0.0 && CursorRect.w > 0.0)
     {
         float2 cursorUv = (sampleUv - CursorRect.xy) / CursorRect.zw;
@@ -292,29 +307,26 @@ float4 TransitionPS(VsOut input) : SV_Target
     }
 
     // --- off-axis viewing --------------------------------------------------
-    // A real panel rotating away loses contrast and saturation, and does so
-    // more the further a point is from the hinge, because that is where the
-    // viewing angle is worst. Asymmetric for the same reason.
-    float axis = (uv.y < HingeY)
-        ? ((HingeY - uv.y) / max(HingeY, 1e-5))
-        : (((uv.y - HingeY) / max(1.0 - HingeY, 1e-5)) * 0.45);
-    float wash = saturate(OffAxisWash * saturate(axis));
+    // A panel rotating away loses contrast and saturation, and does so more the
+    // further a point is from the hinge, because that is where the viewing angle
+    // is worst.
+    float wash = saturate(OffAxisWash * along);
 
     float grey = dot(colour, float3(0.2126, 0.7152, 0.0722));
     colour = lerp(colour, grey.xxx, wash * 0.35);
     colour = (colour * (1.0 - (0.42 * wash))) + (0.012 * wash);
 
-    // --- luminance falloff behind the edge --------------------------------
-    // A wide, soft gradient that precedes the hard edge. This is what stops the
-    // boundary reading as a drawn rectangle: the panel darkens into its own
-    // edge instead of meeting it abruptly.
-    float shadow = smoothstep(0.0, max(ShadowExtent, 1e-5), distanceInside);
-    colour *= lerp(1.0 - saturate(ShadowStrength), 1.0, shadow);
+    // --- luminance falloff toward the far edge ----------------------------
+    // The far edge is both further away and more oblique, so it is dimmer. A
+    // wide, soft gradient rather than a step: it is what stops the boundary
+    // reading as a drawn rectangle.
+    float dim = ShadowStrength * pow(along, max(ShadowFalloff, 0.05));
+    colour *= saturate(1.0 - dim);
 
     // --- specular sweep ---------------------------------------------------
-    // The reflection that slides across a glossy panel as it turns. Cool-tinted
-    // and additive, peaking a little way inside the edge.
-    float glareT = (distanceInside - GlareOffset) / max(GlareWidth, 1e-5);
+    // The highlight that runs along the panel's leading edge as it turns.
+    // Cool-tinted, additive, and strongest while the panel is actually moving.
+    float glareT = (1.0 - along) / max(GlareWidth, 1e-5);
     float glare = exp(-(glareT * glareT)) * GlareStrength;
     colour += glare * float3(0.88, 0.94, 1.0);
 
