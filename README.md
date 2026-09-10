@@ -227,7 +227,20 @@ docs/RESEARCH.md     What was established before implementation, with sources,
                      and the platform limits that bound the effect.
 docs/ARCHITECTURE.md Pipeline, module map, state machine, config reference.
 docs/TESTING.md      Automated coverage and the manual hardware checklist.
+scripts/TUNE.cmd     Build, seed a portable config and launch with the developer
+                     overlay - the loop for visual tuning.
 ```
+
+### Tuning the effect
+
+```cmd
+scripts\TUNE.cmd close
+```
+
+Builds, drops a `config.json` beside the executable (which overrides your real
+settings), and plays one closing preview with the developer overlay up. Edit that
+file and re-run. `hingeBias`, `perspectiveStrength`, `maxBlur` and
+`shadowStrength` are the values that move the needle most.
 
 ## Verification status
 
