@@ -24,6 +24,10 @@ on:
         description: 'Publish a GitHub Release for this build'
         type: boolean
         default: true
+      release_tag:
+        description: 'Tag for a stable release (e.g. v1.0.0). Leave empty for a rolling pre-release.'
+        type: string
+        default: ''
 
 permissions:
   # Required so the release step can create the tag and the release.
@@ -114,8 +118,17 @@ jobs:
           $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
           if (-not $version) { $version = '1.0.0' }
 
+          $requested = '${{ inputs.release_tag }}'
+
           if ($env:GITHUB_REF -like 'refs/tags/*') {
+              # A pushed tag is always a stable release.
               $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+              $prerelease = 'false'
+          } elseif ($requested) {
+              # An explicitly requested tag is also stable. This exists because a
+              # tag cannot always be pushed from the development environment, and
+              # the runner's own token can create it.
+              $tag = $requested
               $prerelease = 'false'
           } else {
               $tag = "v$version-build.$env:GITHUB_RUN_NUMBER"
