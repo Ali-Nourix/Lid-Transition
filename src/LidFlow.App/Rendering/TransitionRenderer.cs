@@ -240,6 +240,10 @@ internal sealed class TransitionRenderer : IDisposable
             Padding = Vector2.Zero,
 
             CursorRect = cursor is not null && cursor.HasCursor ? cursor.Rect : Vector4.Zero,
+
+            BezelAmbient = frame.BezelAmbient,
+            BezelFalloff = frame.BezelFalloffPx * ToPanelUnits,
+            Padding2 = Vector2.Zero,
         };
 
         MappedSubresource mapped = _graphics.Context.Map(_constantBuffer!, 0, MapMode.WriteDiscard, Vortice.Direct3D11.MapFlags.None);

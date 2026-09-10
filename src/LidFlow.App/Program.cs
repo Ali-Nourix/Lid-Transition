@@ -82,9 +82,7 @@ internal static class Program
 
             if (options.PreviewClose || options.PreviewOpen)
             {
-                // Run the requested preview once the message loop is pumping, so it
-                // goes through exactly the same path a real lid event would.
-                SynchronizationContext.Current?.Post(_ => context.RunPreview(options.PreviewClose), null);
+                context.QueuePreview(options.PreviewClose);
             }
 
             Application.Run(context);

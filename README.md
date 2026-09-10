@@ -222,7 +222,7 @@ src/LidFlow.Core     Platform-neutral: animation model, state machine, easing,
                      configuration, monitor selection. Unit-tested on any OS.
 src/LidFlow.App      Windows: Win32 interop, D3D11/DXGI, DirectComposition
                      overlay, capture backends, tray, settings.
-tests/               125 unit tests over LidFlow.Core.
+tests/               127 unit tests over LidFlow.Core.
 docs/RESEARCH.md     What was established before implementation, with sources,
                      and the platform limits that bound the effect.
 docs/ARCHITECTURE.md Pipeline, module map, state machine, config reference.
@@ -231,7 +231,7 @@ docs/TESTING.md      Automated coverage and the manual hardware checklist.
 
 ## Verification status
 
-- **125 unit tests** over the animation model, state machine, easing, hinge-angle
+- **127 unit tests** over the animation model, state machine, easing, hinge-angle
   mapping, configuration and monitor selection — green.
 - The **whole solution compiles clean**, Windows app included.
 - **CI builds it on a real `windows-latest` runner** with the same

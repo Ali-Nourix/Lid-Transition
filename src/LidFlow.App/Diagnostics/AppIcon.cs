@@ -70,6 +70,30 @@ internal static class AppIcon
         }
     }
 
+    /// <summary>
+    /// First installed font from <paramref name="families"/>, falling back to the
+    /// supplied generic. Constructing a <see cref="Font"/> from a family name that
+    /// is not installed does not reliably fall back, and LidFlow has to run on
+    /// Windows 10, where several Windows 11 font families are absent.
+    /// </summary>
+    public static Font FirstAvailableFont(float size, FontStyle style, params string[] families)
+    {
+        foreach (string family in families)
+        {
+            try
+            {
+                using FontFamily candidate = new(family);
+                return new Font(candidate, size, style, GraphicsUnit.Point);
+            }
+            catch (ArgumentException)
+            {
+                // Not installed; try the next one.
+            }
+        }
+
+        return new Font(FontFamily.GenericSansSerif, size, style, GraphicsUnit.Point);
+    }
+
     private static GraphicsPath RoundedRectangle(RectangleF bounds, float radius)
     {
         float diameter = Math.Min(radius * 2f, Math.Min(bounds.Width, bounds.Height));

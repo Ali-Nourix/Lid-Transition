@@ -72,6 +72,13 @@ internal sealed class GdiSnapshotSource : ISnapshotSource
         IntPtr bitmap = IntPtr.Zero;
         IntPtr previous = IntPtr.Zero;
 
+        // CreateDC handles are deleted, GetDC handles are released, and using the
+        // wrong call on either is documented as invalid - so remember which it is
+        // rather than trying both.
+        bool displayDcOwned = false;
+        int blitOriginX = 0;
+        int blitOriginY = 0;
+
         try
         {
             // A DC for this specific display, so multi-monitor coordinates do not
@@ -82,14 +89,23 @@ internal sealed class GdiSnapshotSource : ISnapshotSource
                 displayDc = NativeMethods.CreateDCW(driver, device, null, IntPtr.Zero);
             }
 
-            if (displayDc == IntPtr.Zero)
+            if (displayDc != IntPtr.Zero)
             {
-                // Fall back to the whole virtual screen and offset the blit.
+                displayDcOwned = true;
+            }
+            else
+            {
+                // Fall back to the whole virtual screen. That DC's origin is the
+                // top-left of the virtual desktop, not of this display, so the blit
+                // has to be offset by the display's position.
                 displayDc = NativeMethods.GetDC(IntPtr.Zero);
                 if (displayDc == IntPtr.Zero)
                 {
                     return CaptureResult.Failed(CaptureFailure.Unavailable, "No display device context.");
                 }
+
+                blitOriginX = bounds.X;
+                blitOriginY = bounds.Y;
             }
 
             memoryDc = NativeMethods.CreateCompatibleDC(displayDc);
@@ -135,8 +151,8 @@ internal sealed class GdiSnapshotSource : ISnapshotSource
                     bounds.Width,
                     bounds.Height,
                     displayDc,
-                    0,
-                    0,
+                    blitOriginX,
+                    blitOriginY,
                     NativeMethods.SRCCOPY | NativeMethods.CAPTUREBLT))
             {
                 return CaptureResult.Failed(CaptureFailure.Error, "BitBlt failed.");
@@ -194,9 +210,11 @@ internal sealed class GdiSnapshotSource : ISnapshotSource
 
             if (displayDc != IntPtr.Zero)
             {
-                // CreateDCW handles are deleted; GetDC handles are released. Trying
-                // both is harmless - each rejects the other's handle type.
-                if (!NativeMethods.DeleteDC(displayDc))
+                if (displayDcOwned)
+                {
+                    NativeMethods.DeleteDC(displayDc);
+                }
+                else
                 {
                     NativeMethods.ReleaseDC(IntPtr.Zero, displayDc);
                 }

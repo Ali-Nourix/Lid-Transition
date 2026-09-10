@@ -175,6 +175,11 @@ public sealed class LidAnimationModel
             OffAxisWash = _config.OffAxisWash * onset,
             Luminance = 1f - (_config.GlobalDim * onset),
 
+            // Ramped with the same onset as the other terms, so the first frame is
+            // still exactly the untouched desktop.
+            BezelAmbient = _config.EnableShadow ? _config.BezelAmbient * onset : 0f,
+            BezelFalloffPx = _config.BezelFalloffPx,
+
             BlurTaps = BlurTaps,
             DitherEnabled = _config.EnableDither,
         };

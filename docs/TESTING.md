@@ -6,7 +6,7 @@
 dotnet test tests\LidFlow.Core.Tests\LidFlow.Core.Tests.csproj
 ```
 
-**125 tests, green.** They run on any OS — no GPU, no display, no lid — because
+**127 tests, green.** They run on any OS — no GPU, no display, no lid — because
 everything worth asserting lives in the platform-neutral `LidFlow.Core`. CI runs
 them on `windows-latest` as part of `BUILD-WINDOWS.ps1`.
 

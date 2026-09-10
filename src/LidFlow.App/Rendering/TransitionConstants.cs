@@ -10,7 +10,7 @@ namespace LidFlow.App.Rendering;
 /// The field order here must match the shader exactly. It is arranged so that no
 /// member straddles a 16-byte boundary, which is what HLSL's packing rules
 /// require and what makes a plain sequential layout correct without any explicit
-/// padding between groups. Total size is 160 bytes: ten float4 registers.
+/// padding between groups. Total size is 176 bytes: eleven float4 registers.
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
@@ -67,6 +67,11 @@ internal struct TransitionConstants
     // register c9
     public Vector4 CursorRect;
 
+    // register c10
+    public float BezelAmbient;
+    public float BezelFalloff;
+    public Vector2 Padding2;
+
     /// <summary>Expected size in bytes. Asserted at startup against the real size.</summary>
-    public const int ExpectedSize = 160;
+    public const int ExpectedSize = 176;
 }

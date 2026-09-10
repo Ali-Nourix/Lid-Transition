@@ -27,6 +27,8 @@
     "distortionStrength": 0.5,
     "offAxisWash": 0.35,
     "globalDim": 0.1,
+    "bezelAmbient": 0.01,
+    "bezelFalloffPx": 22,
     "enableBlur": true,
     "enableShadow": true,
     "enableDistortion": true,

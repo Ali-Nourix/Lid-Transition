@@ -144,6 +144,19 @@ public sealed class AnimationConfig
     /// <summary>Overall luminance loss at full close, before occlusion.</summary>
     public float GlobalDim { get; set; } = 0.10f;
 
+    /// <summary>
+    /// Ambient light the panel bezel picks up, just outside the aperture.
+    /// <para>
+    /// Small but load-bearing: a mathematically perfect black boundary reads as a
+    /// hole cut in the image, whereas a faint brightening against the glass reads
+    /// as an object occluding it. Set to 0 for a pure-black edge.
+    /// </para>
+    /// </summary>
+    public float BezelAmbient { get; set; } = 0.010f;
+
+    /// <summary>Distance outside the edge over which the bezel ambient decays.</summary>
+    public float BezelFalloffPx { get; set; } = 22f;
+
     public bool EnableBlur { get; set; } = true;
 
     public bool EnableShadow { get; set; } = true;
@@ -208,6 +221,8 @@ public sealed class AnimationConfig
         DistortionStrength = Clamp(DistortionStrength, 0f, 4f);
         OffAxisWash = Clamp(OffAxisWash, 0f, 1f);
         GlobalDim = Clamp(GlobalDim, 0f, 1f);
+        BezelAmbient = Clamp(BezelAmbient, 0f, 0.25f);
+        BezelFalloffPx = Clamp(BezelFalloffPx, 1f, 400f);
 
         if (!Enum.IsDefined(typeof(AnimationQuality), Quality))
         {
@@ -248,6 +263,8 @@ public sealed class AnimationConfig
         DistortionStrength = DistortionStrength,
         OffAxisWash = OffAxisWash,
         GlobalDim = GlobalDim,
+        BezelAmbient = BezelAmbient,
+        BezelFalloffPx = BezelFalloffPx,
         EnableBlur = EnableBlur,
         EnableShadow = EnableShadow,
         EnableDistortion = EnableDistortion,

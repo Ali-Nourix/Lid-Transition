@@ -36,7 +36,40 @@ public sealed class LidAnimationModelTests
         Assert.Equal(0f, frame.OffAxisWash, 5);
         Assert.Equal(0f, frame.GlareStrength, 5);
         Assert.Equal(0f, frame.CornerRadiusPx, 5);
+        Assert.Equal(0f, frame.BezelAmbient, 5);
         Assert.Equal(1f, frame.Luminance, 5);
+    }
+
+    [Fact]
+    public void BezelAmbientRampsInButStaysFarBelowContentLuminance()
+    {
+        // The bezel term exists to stop the boundary reading as a hole cut in the
+        // image. It has to be absent on the first frame, present once the panel is
+        // moving, and small enough never to look like a glow effect.
+        LidAnimationModel model = new(Config(), TransitionKind.Close);
+
+        Assert.Equal(0f, model.Evaluate(0f).BezelAmbient, 5);
+
+        float mid = model.Evaluate(0.5f).BezelAmbient;
+        Assert.True(mid > 0f, "Bezel ambient should be present mid-transition.");
+        Assert.True(mid < 0.05f, $"Bezel ambient {mid} is too strong to read as a bezel.");
+    }
+
+    [Fact]
+    public void DisablingShadowAlsoRemovesTheBezelAmbient()
+    {
+        // They are the same physical idea - light behaviour at the panel edge - so
+        // turning the edge treatment off must remove both.
+        AnimationConfig config = Config();
+        config.EnableShadow = false;
+        config.Normalize();
+
+        LidAnimationModel model = new(config, TransitionKind.Close);
+
+        for (int i = 0; i <= 20; i++)
+        {
+            Assert.Equal(0f, model.Evaluate(i / 20f).BezelAmbient, 5);
+        }
     }
 
     [Fact]
@@ -328,5 +361,7 @@ public sealed class LidAnimationModelTests
         Assert.True(float.IsFinite(frame.DistortionStrength), nameof(frame.DistortionStrength));
         Assert.True(float.IsFinite(frame.OffAxisWash), nameof(frame.OffAxisWash));
         Assert.True(float.IsFinite(frame.Luminance), nameof(frame.Luminance));
+        Assert.True(float.IsFinite(frame.BezelAmbient), nameof(frame.BezelAmbient));
+        Assert.True(float.IsFinite(frame.BezelFalloffPx), nameof(frame.BezelFalloffPx));
     }
 }

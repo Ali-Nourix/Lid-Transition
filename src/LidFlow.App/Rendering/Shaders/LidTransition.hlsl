@@ -76,6 +76,10 @@ cbuffer TransitionParams : register(b0)
     // Cursor placement in snapshot UV space: xy = top-left, zw = size.
     // A zero size means "no separate cursor to draw".
     float4 CursorRect;
+
+    float  BezelAmbient;
+    float  BezelFalloff;        // panel units
+    float2 Padding2;
 };
 
 Texture2D<float4> Snapshot : register(t0);
@@ -182,7 +186,10 @@ float3 SampleBlurred(float2 uv, float2 direction, float radiusPanel)
         return Snapshot.SampleLevel(LinearClamp, uv, 0.0).rgb;
     }
 
-    int taps = (int)BlurTaps;
+    // Guarded: a zero or negative tap count would divide the accumulated weight
+    // by nothing and return black, which on screen would look like a hole rather
+    // than an error.
+    int taps = max((int)BlurTaps, 1);
     float radiusPixels = radiusPanel * PanelHeightPx;
 
     // Choose the mip whose texels are about as wide as the gap between taps,
@@ -225,7 +232,17 @@ float4 TransitionPS(VsOut input) : SV_Target
     float edgeMask = smoothstep(0.0, max(EdgeSoftness, 1e-5), distanceInside);
     float occlusion = lerp(1.0, edgeMask, saturate(BlackOpacity));
 
-    if (occlusion <= 0.0009)
+    // --- bezel ambient -----------------------------------------------------
+    // A real panel's bezel is not a void: it picks up a little ambient light,
+    // brightest right against the glass. Without this the boundary between
+    // content and black is mathematically perfect and reads as drawn rather than
+    // physical - it is the difference between an occluding object and a hole cut
+    // in the image. Kept far below the content's own luminance so it never looks
+    // like a glow effect.
+    float outside = max(-distanceInside, 0.0);
+    float bezel = BezelAmbient * exp(-outside / max(BezelFalloff, 1e-5));
+
+    if (occlusion <= 0.0009 && bezel <= 0.0006)
     {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
@@ -304,6 +321,9 @@ float4 TransitionPS(VsOut input) : SV_Target
     // --- global dim and occlusion ----------------------------------------
     colour *= Luminance;
     colour *= occlusion;
+
+    // Slightly cool, because a bezel reflects the room rather than the panel.
+    colour += bezel * float3(0.90, 0.94, 1.0);
 
     // --- dither ------------------------------------------------------------
     // Two decorrelated noise samples make a triangular distribution, which is

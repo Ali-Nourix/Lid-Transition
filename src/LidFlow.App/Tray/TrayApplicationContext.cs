@@ -32,6 +32,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly Icon _icon;
 
     private LidFlowConfig _config;
+    private bool _hasPendingPreview;
+    private bool _pendingPreviewClose;
     private SettingsForm? _settingsForm;
     private DebugHudForm? _debugHud;
     private bool _disposed;
@@ -80,22 +82,40 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _messageWindow.PreviewClosePressed += (_, _) => _controller.PreviewClose();
         _messageWindow.PreviewOpenPressed += (_, _) => _controller.PreviewOpen();
 
+        _messageWindow.StartupRequested += (_, _) =>
+        {
+            if (!_hasPendingPreview)
+            {
+                return;
+            }
+
+            _hasPendingPreview = false;
+
+            if (_pendingPreviewClose)
+            {
+                _controller.PreviewClose();
+            }
+            else
+            {
+                _controller.PreviewOpen();
+            }
+        };
+
         ApplyDebugHud();
 
         _log.Info($"LidFlow ready. Lid state: {_lidMonitor.State}.");
     }
 
-    /// <summary>Runs a preview transition, used by the command-line switches.</summary>
-    public void RunPreview(bool close)
+    /// <summary>
+    /// Schedules a preview to run once the message loop is pumping, so it goes
+    /// through exactly the same path a real lid event does. Used by the
+    /// command-line switches.
+    /// </summary>
+    public void QueuePreview(bool close)
     {
-        if (close)
-        {
-            _controller.PreviewClose();
-        }
-        else
-        {
-            _controller.PreviewOpen();
-        }
+        _pendingPreviewClose = close;
+        _hasPendingPreview = true;
+        _messageWindow.RequestStartup();
     }
 
     private ContextMenuStrip BuildMenu()

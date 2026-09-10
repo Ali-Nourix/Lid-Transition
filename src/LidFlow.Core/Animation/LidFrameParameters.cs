@@ -77,6 +77,12 @@ public readonly struct LidFrameParameters
     /// <summary>Global luminance multiplier applied before occlusion.</summary>
     public float Luminance { get; init; }
 
+    /// <summary>Ambient light picked up by the panel bezel, just outside the aperture.</summary>
+    public float BezelAmbient { get; init; }
+
+    /// <summary>Distance outside the edge over which the bezel ambient decays.</summary>
+    public float BezelFalloffPx { get; init; }
+
     /// <summary>Blur tap count for this quality tier.</summary>
     public int BlurTaps { get; init; }
 

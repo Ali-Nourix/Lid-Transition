@@ -65,6 +65,17 @@ internal sealed class PowerEventWindow : NativeWindow, IDisposable
     /// </summary>
     private const uint WM_LIDFLOW_FRAME = 0x8000 + 1;   // WM_APP + 1
 
+    /// <summary>
+    /// Posted once at start-up to run deferred work on the first pump iteration.
+    /// <para>
+    /// Used instead of <c>SynchronizationContext.Post</c>, because a Windows Forms
+    /// synchronization context is not guaranteed to be installed before
+    /// <c>Application.Run</c> - relying on it would make <c>--preview-close</c>
+    /// silently do nothing.
+    /// </para>
+    /// </summary>
+    private const uint WM_LIDFLOW_STARTUP = 0x8000 + 2;  // WM_APP + 2
+
     private readonly ILidFlowLog _log;
     private readonly List<IntPtr> _registrations = new();
     private bool _hotkeysRegistered;
@@ -113,6 +124,12 @@ internal sealed class PowerEventWindow : NativeWindow, IDisposable
 
     /// <summary>Queues a single animation frame.</summary>
     public void RequestFrame() => NativeMethods.PostMessageW(Handle, WM_LIDFLOW_FRAME, IntPtr.Zero, IntPtr.Zero);
+
+    /// <summary>Deferred start-up work, run on the first message pump iteration.</summary>
+    public event EventHandler? StartupRequested;
+
+    /// <summary>Queues <see cref="StartupRequested"/>.</summary>
+    public void RequestStartup() => NativeMethods.PostMessageW(Handle, WM_LIDFLOW_STARTUP, IntPtr.Zero, IntPtr.Zero);
 
     /// <summary>
     /// Subscribes to a power setting. Failure is logged and tolerated: losing the
@@ -206,6 +223,10 @@ internal sealed class PowerEventWindow : NativeWindow, IDisposable
 
             case WM_LIDFLOW_FRAME:
                 FrameRequested?.Invoke(this, EventArgs.Empty);
+                return;
+
+            case WM_LIDFLOW_STARTUP:
+                StartupRequested?.Invoke(this, EventArgs.Empty);
                 return;
 
             case NativeMethods.WM_DISPLAYCHANGE:

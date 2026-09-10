@@ -215,6 +215,8 @@ are scaled by the real panel height; everything else is a 0..1 fraction.
 | `distortionStrength` | `0.5` | Optical refraction term near the edge. |
 | `offAxisWash` | `0.35` | Contrast/saturation loss with distance from the hinge. |
 | `globalDim` | `0.10` | Overall luminance loss at full close. |
+| `bezelAmbient` | `0.010` | Ambient light the bezel picks up just outside the aperture. Small, but it is what stops the boundary reading as a hole cut in the image rather than an object occluding it. `0` gives a pure-black edge. |
+| `bezelFalloffPx` | `22` | Distance outside the edge over which that ambient decays. |
 | `enableBlur` / `enableShadow` / `enableDistortion` / `enableGlare` / `enableDither` | `true` | Per-effect switches, useful for isolating one channel while tuning. |
 | `quality` | `Balanced` | `Performance` / `Balanced` / `High` → 5 / 9 / 13 blur taps. |
 | `closeEasing` / `openEasing` | `LidClose` / `LidOpen` | `{ preset, bezier[4], springDamping, springFrequency }`. Presets: `CustomBezier`, `Linear`, `EaseOutCubic`, `EaseInOutCubic`, `EaseOutQuart`, `EaseOutQuint`, `EaseInOutQuint`, `EaseOutExpo`, `Spring`, `LidClose`, `LidOpen`. |

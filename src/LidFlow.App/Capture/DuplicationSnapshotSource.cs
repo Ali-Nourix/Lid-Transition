@@ -116,10 +116,14 @@ internal sealed class DuplicationSnapshotSource : ISnapshotSource
 
                 if (result.Success && resource is not null)
                 {
+                    // Set before anything else can throw: the API requires a
+                    // release between acquires, so a frame acquired but not
+                    // recorded would deadlock every later capture.
+                    _holdingFrame = true;
+
                     try
                     {
                         using ID3D11Texture2D texture = resource.QueryInterface<ID3D11Texture2D>();
-                        _holdingFrame = true;
 
                         if (!snapshot.CopyFrom(texture))
                         {

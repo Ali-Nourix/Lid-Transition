@@ -37,7 +37,7 @@ internal sealed class DebugHudForm : Form
 
         _text.Dock = DockStyle.Fill;
         _text.ForeColor = Color.FromArgb(225, 230, 240);
-        _text.Font = new Font("Cascadia Mono", 8.5f, FontStyle.Regular, GraphicsUnit.Point);
+        _text.Font = AppIcon.FirstAvailableFont(8.5f, FontStyle.Regular, "Cascadia Mono", "Consolas", "Courier New");
         _text.Padding = new Padding(10);
         _text.UseMnemonic = false;
         Controls.Add(_text);

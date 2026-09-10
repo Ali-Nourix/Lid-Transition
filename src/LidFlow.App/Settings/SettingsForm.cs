@@ -50,7 +50,14 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        Font = new Font("Segoe UI Variable Text", 9f, FontStyle.Regular, GraphicsUnit.Point);
+        // Segoe UI Variable is the Windows 11 UI face; Segoe UI is the Windows 10
+        // one. Picking the first that is installed keeps the dialog looking native
+        // on both rather than falling back to a generic face.
+        Font = Diagnostics.AppIcon.FirstAvailableFont(
+            9f,
+            FontStyle.Regular,
+            "Segoe UI Variable Text",
+            "Segoe UI");
         ClientSize = new Size(470, 560);
         ShowIcon = true;
         Icon = Diagnostics.AppIcon.Create();
