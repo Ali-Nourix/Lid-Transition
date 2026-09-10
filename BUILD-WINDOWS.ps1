@@ -163,7 +163,10 @@ $env:DOTNET_NOLOGO = '1'
 
 Write-Step 'Restoring NuGet packages'
 
-& dotnet restore $Solution -r $Runtime
+# Restored without a runtime identifier: NETSDK1134 forbids building a solution
+# for a specific RID. The RID is applied at publish time, on the one project that
+# actually produces a runnable binary.
+& dotnet restore $Solution
 if ($LASTEXITCODE -ne 0) {
     Fail 'Package restore failed.' @'
 Most often this is no network access to nuget.org, or a proxy that needs
@@ -177,7 +180,7 @@ Write-Good 'Packages restored.'
 
 Write-Step "Building ($Configuration)"
 
-& dotnet build $Solution -c $Configuration --no-restore -r $Runtime
+& dotnet build $Solution -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) {
     Fail 'Compilation failed. The compiler output above lists the errors.' ''
 }
