@@ -1,0 +1,31 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+dist/
+artifacts/
+*.binlog
+
+# IDE / editor caches
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS noise
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Local machine-specific config (the tracked example is config.example.json)
+config.local.json
+
+# Logs
+*.log
+Logs/
+
+# Packaging
+*.zip
+!assets/**/*.zip

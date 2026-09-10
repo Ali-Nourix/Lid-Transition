@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      TargetFramework selects which Windows SDK WinRT projections are available
+      at COMPILE time; SupportedOSPlatformVersion is the RUNTIME floor. They are
+      deliberately different here.
+
+      The projection is 22621 because GraphicsCaptureSession.IsBorderRequired
+      only appears from build 20348 onwards, and the capture backend needs to be
+      able to reference it. Every such newer API is feature-detected at runtime
+      through ApiInformation before use.
+
+      The runtime floor is 19041 (Windows 10, version 2004) because that is the
+      build that introduced WDA_EXCLUDEFROMCAPTURE, which the overlay relies on
+      to stay out of its own snapshot. See docs/RESEARCH.md.
+    -->
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>LidFlow.App</RootNamespace>
+    <AssemblyName>LidFlow</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Lets the project restore and compile on a non-Windows CI machine. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <!--
+      Windows Forms is used for exactly three things: the tray icon, the
+      settings dialog, and the hidden window that receives WM_POWERBROADCAST.
+      None of the visual effect goes through it - the overlay is a raw
+      CreateWindowEx window with a Direct3D 11 swap chain composed by
+      DirectComposition, because the styles and commit ordering it needs are
+      not expressible through a managed UI framework.
+    -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+
+    <!-- No console window in production. -->
+    <DisableWinExeOutputInference>true</DisableWinExeOutputInference>
+
+    <!-- Keep the animation off the GC's critical path. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!--
+      WFAC010 asks us to move the DPI setting out of the manifest and into
+      Application.SetHighDpiMode. We deliberately keep it in the manifest: it
+      has to take effect before any managed code runs, because the overlay
+      needs true physical monitor coordinates from the very first lid event,
+      and SetHighDpiMode runs too late to guarantee that.
+    -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Vortice.Windows: thin, well-maintained C# bindings over the system DXGI,
+      Direct3D 11, DirectComposition and D3DCompiler DLLs. No native payload of
+      its own - it calls the same OS libraries a C++ build would.
+    -->
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LidFlow.Core\LidFlow.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The shader ships as source and is compiled by d3dcompiler at startup.
+      That keeps the build free of any Windows SDK / fxc dependency (so the
+      project builds with nothing but the .NET SDK) and costs a few
+      milliseconds once, off the transition's critical path.
+    -->
+    <EmbeddedResource Include="Rendering\Shaders\LidTransition.hlsl" LogicalName="LidFlow.Shaders.LidTransition.hlsl" />
+  </ItemGroup>
+
+</Project>

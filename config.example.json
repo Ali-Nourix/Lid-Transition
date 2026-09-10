@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "animation": {
+    "enableAnimation": true,
+    "closeDurationMs": 340,
+    "openDurationMs": 285,
+    "hingeBias": 0.62,
+    "edgeExpansion": 0.13,
+    "sideDelay": 0.18,
+    "perspectiveStrength": 0.85,
+    "edgeSoftness": 2.6,
+    "cornerRadiusPx": 30,
+    "shadowExtentPx": 155,
+    "shadowStrength": 0.88,
+    "maxBlur": 34,
+    "blurRadius": 175,
+    "blurVelocityInfluence": 0.72,
+    "blackOpacity": 1,
+    "glareStrength": 0.055,
+    "glareOffsetPx": 26,
+    "glareWidthPx": 62,
+    "warpStrength": 0.03,
+    "distortionStrength": 0.5,
+    "offAxisWash": 0.35,
+    "globalDim": 0.1,
+    "enableBlur": true,
+    "enableShadow": true,
+    "enableDistortion": true,
+    "enableGlare": true,
+    "enableDither": true,
+    "quality": "Balanced",
+    "closeEasing": {
+      "preset": "LidClose",
+      "bezier": [
+        0.24,
+        0.92,
+        0.2,
+        1
+      ],
+      "springDamping": 1,
+      "springFrequency": 3.2
+    },
+    "openEasing": {
+      "preset": "LidOpen",
+      "bezier": [
+        0.14,
+        0.98,
+        0.24,
+        1
+      ],
+      "springDamping": 1,
+      "springFrequency": 3.2
+    }
+  },
+  "monitor": {
+    "mode": "InternalPanel",
+    "manualDisplayId": null,
+    "allowExternalDisplays": false
+  },
+  "behavior": {
+    "startWithWindows": false,
+    "skipWhenFullscreenAppActive": true,
+    "enablePreviewHotkeys": true,
+    "warmCapture": false,
+    "captureTimeoutMs": 45,
+    "captureBackend": "Auto",
+    "includeCursorInSnapshot": true
+  },
+  "diagnostics": {
+    "showDebugHud": false,
+    "enableFileLogging": true,
+    "verboseFrameLogging": false,
+    "previewHoldMs": 350
+  }
+}

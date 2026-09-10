@@ -1,0 +1,192 @@
+# ==============================================================================
+# LidFlow - Windows build, test and release
+#
+# The repository is developed from a Linux container where the projects compile
+# (the app project sets EnableWindowsTargeting) but cannot be published or run.
+# This workflow is therefore the real build verification: it runs the exact same
+# BUILD-WINDOWS.ps1 a user would run, on a genuine Windows runner, and publishes
+# what it produces as a tagged GitHub Release.
+# ==============================================================================
+name: build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'claude/**'
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish a GitHub Release for this build'
+        type: boolean
+        default: true
+
+permissions:
+  # Required so the release step can create the tag and the release.
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build, test and package (windows-latest)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Full history so the release notes can reference the commit range.
+          fetch-depth: 0
+
+      - name: Set up .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          Write-Host "OS       : $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "Build    : $([System.Environment]::OSVersion.Version.Build)"
+          Write-Host "dotnet   : $(dotnet --version)"
+          dotnet --list-sdks
+
+      # Runs restore, build, the unit tests, publish and packaging. The script
+      # fails the job on any of those, so there is no separate test step: the
+      # build entry point users have is the one CI exercises.
+      - name: Build (BUILD-WINDOWS.ps1)
+        shell: pwsh
+        run: ./BUILD-WINDOWS.ps1 -Configuration Release -Runtime win-x64
+
+      - name: Verify the published output
+        shell: pwsh
+        run: |
+          $exe = 'dist/LidFlow/LidFlow.exe'
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+
+          $info = Get-Item $exe
+          Write-Host "LidFlow.exe  $([math]::Round($info.Length / 1KB, 0)) KB"
+
+          # The transition shader ships as an embedded resource and is compiled at
+          # start-up, so a missing resource would only show up at runtime. Assert
+          # it is actually in the assembly.
+          Add-Type -AssemblyName System.Runtime
+          $assembly = [System.Reflection.Assembly]::LoadFrom((Resolve-Path 'dist/LidFlow/LidFlow.dll'))
+          $resources = $assembly.GetManifestResourceNames()
+          Write-Host "Embedded resources: $($resources -join ', ')"
+          if ($resources -notcontains 'LidFlow.Shaders.LidTransition.hlsl') {
+              throw 'The transition shader is not embedded in the assembly.'
+          }
+
+          Get-ChildItem dist -Filter *.zip | ForEach-Object {
+              Write-Host "$($_.Name)  $([math]::Round($_.Length / 1MB, 2)) MB"
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LidFlow-windows-x64
+          path: |
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      # ----------------------------------------------------------------- release
+      #
+      # Only runs when the build above succeeded, so a failing build never
+      # creates a tag. A pushed v* tag produces a normal release; a push to a
+      # development branch produces a pre-release tagged with the run number, so
+      # every green build is downloadable from the Releases and Tags pages.
+      - name: Work out the release tag
+        id: tag
+        if: >-
+          github.event_name != 'pull_request' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release)
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
+          if (-not $version) { $version = '1.0.0' }
+
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+              $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+              $prerelease = 'false'
+          } else {
+              $tag = "v$version-build.$env:GITHUB_RUN_NUMBER"
+              $prerelease = 'true'
+          }
+
+          Write-Host "tag=$tag prerelease=$prerelease"
+          "tag=$tag"               | Out-File $env:GITHUB_OUTPUT -Append
+          "prerelease=$prerelease" | Out-File $env:GITHUB_OUTPUT -Append
+          "version=$version"       | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Publish the release
+        if: steps.tag.outputs.tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $prerelease = '${{ steps.tag.outputs.prerelease }}' -eq 'true'
+
+          $notes = @"
+          Built from ``$env:GITHUB_SHA`` on ``windows-latest`` by run [#$env:GITHUB_RUN_NUMBER]($env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID).
+
+          ## Downloads
+
+          | File | Contents |
+          | --- | --- |
+          | ``LidFlow-Windows-x64.zip`` | Self-contained build. Extract and run ``LidFlow.exe``, or ``INSTALL.cmd`` to install for the current user. No .NET installation required. |
+          | ``LidFlow-Windows-Source.zip`` | Complete source tree, without build output or VCS data. Build it with ``BUILD-WINDOWS.cmd``. |
+
+          ## Requirements
+
+          - Windows 11, or Windows 10 version 2004 (build 19041) or later.
+          - No administrator rights. No network access. No telemetry.
+
+          ## Verification status
+
+          The unit tests and the full ``BUILD-WINDOWS.ps1`` pipeline ran green on this commit.
+          The on-screen result has **not** been verified on physical hardware by CI - a
+          runner has no laptop lid and no display. See ``docs/TESTING.md`` for the manual
+          checklist, and ``docs/RESEARCH.md`` for the Windows power-management limits that
+          determine when the effect can be seen at all.
+          "@
+
+          $notesFile = Join-Path $env:RUNNER_TEMP 'notes.md'
+          $notes | Set-Content -Path $notesFile -Encoding utf8
+
+          $args = @(
+            'release', 'create', $tag,
+            'dist/LidFlow-Windows-x64.zip',
+            'dist/LidFlow-Windows-Source.zip',
+            '--title', "LidFlow $tag",
+            '--notes-file', $notesFile,
+            '--target', $env:GITHUB_SHA
+          )
+
+          if ($prerelease) { $args += '--prerelease' }
+
+          # Re-running a workflow for the same tag should refresh the release
+          # rather than fail the build.
+          $existing = gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "Release $tag already exists; replacing its assets."
+              gh release upload $tag `
+                'dist/LidFlow-Windows-x64.zip' `
+                'dist/LidFlow-Windows-Source.zip' `
+                --clobber
+              gh release edit $tag --notes-file $notesFile
+          } else {
+              gh @args
+          }
+
+          if ($LASTEXITCODE -ne 0) { throw "Publishing release $tag failed." }
+          Write-Host "Published $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$tag"

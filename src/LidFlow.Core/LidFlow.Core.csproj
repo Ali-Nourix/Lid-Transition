@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Deliberately platform-neutral (plain net8.0, no -windows suffix).
+
+      Everything in this assembly is pure logic: easing, the animation model that
+      derives every shader parameter from a single normalized progress value, the
+      transition state machine, configuration, monitor selection and lid-state
+      parsing. Keeping it free of Windows APIs means the interesting parts of the
+      project are unit-testable on any OS and in CI without a display.
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>LidFlow.Core</RootNamespace>
+    <AssemblyName>LidFlow.Core</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>
