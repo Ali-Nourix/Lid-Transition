@@ -32,7 +32,7 @@ internal sealed class DebugHudForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(360, 250);
+        ClientSize = new Size(380, 290);
         BackColor = Color.FromArgb(18, 18, 20);
 
         _text.Dock = DockStyle.Fill;
@@ -66,6 +66,12 @@ internal sealed class DebugHudForm : Form
         builder.AppendLine();
         builder.AppendLine(culture, $"adapter        {snapshot.Adapter}{(snapshot.SoftwareRenderer ? " (WARP)" : string.Empty)}");
         builder.AppendLine(culture, $"display power  {snapshot.DisplayPower}");
+        builder.AppendLine(culture, $"input          {(snapshot.HingeTracking ? "hinge angle sensor" : "timed animation")}");
+
+        if (snapshot.HingeAngleDegrees is double angle)
+        {
+            builder.AppendLine(culture, $"hinge angle    {angle:0.0} deg");
+        }
         builder.AppendLine();
 
         DisplayInfo? display = snapshot.Display;

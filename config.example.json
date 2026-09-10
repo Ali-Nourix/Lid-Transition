@@ -2,6 +2,10 @@
   "version": 1,
   "animation": {
     "enableAnimation": true,
+    "useHingeAngleWhenAvailable": true,
+    "hingeClosedAngleDeg": 4,
+    "hingeOpenAngleDeg": 55,
+    "hingeVelocityReference": 3,
     "closeDurationMs": 340,
     "openDurationMs": 285,
     "hingeBias": 0.62,

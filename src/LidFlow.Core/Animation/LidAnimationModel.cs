@@ -95,6 +95,25 @@ public sealed class LidAnimationModel
             ? Easing.Clamp01(_curve.EvaluateVelocity(linearT) / _peakVelocity)
             : 0f;
 
+        return Build(p, velocity);
+    }
+
+    /// <summary>
+    /// Builds the frame parameters from an externally-measured panel position and
+    /// speed, bypassing the easing curve entirely.
+    /// <para>
+    /// This is the path used when a hinge-angle sensor is available: the panel
+    /// position comes from the physical hinge and the blur is driven by how fast
+    /// the lid is genuinely moving, rather than by where a timed curve thinks it
+    /// should be. Everything downstream - geometry, falloff, glare, dithering - is
+    /// identical, so the two input modes cannot drift apart visually.
+    /// </para>
+    /// </summary>
+    public LidFrameParameters EvaluateAtProgress(float panelProgress, float normalizedVelocity) =>
+        Build(Easing.Clamp01(panelProgress), Easing.Clamp01(normalizedVelocity));
+
+    private LidFrameParameters Build(float p, float velocity)
+    {
         float hinge = _config.HingeBias;
 
         // --- Aperture geometry -------------------------------------------------------

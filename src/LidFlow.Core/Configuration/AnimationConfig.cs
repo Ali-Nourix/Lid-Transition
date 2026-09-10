@@ -38,6 +38,31 @@ public sealed class AnimationConfig
     /// <summary>Master switch. When false the app stays resident but never draws.</summary>
     public bool EnableAnimation { get; set; } = true;
 
+    /// <summary>
+    /// Track the physical hinge angle when the hardware reports one, instead of
+    /// playing a fixed-length animation.
+    /// <para>
+    /// This is strictly better where it is available: the image follows the lid
+    /// exactly, so stopping half way or reversing looks right for free. Most
+    /// clamshell laptops have no hinge-angle sensor and fall back to the timed
+    /// path automatically.
+    /// </para>
+    /// </summary>
+    public bool UseHingeAngleWhenAvailable { get; set; } = true;
+
+    /// <summary>Hinge angle at or below which the panel counts as fully closed.</summary>
+    public float HingeClosedAngleDeg { get; set; } = 4f;
+
+    /// <summary>Hinge angle at or above which the effect is fully cleared.</summary>
+    public float HingeOpenAngleDeg { get; set; } = 55f;
+
+    /// <summary>
+    /// Rate of panel progress, per second, that saturates the motion blur in
+    /// hinge-tracking mode. The default is about a third of a second for a full
+    /// close, which is roughly as fast as a lid is ever shut.
+    /// </summary>
+    public float HingeVelocityReference { get; set; } = 3f;
+
     /// <summary>Closing duration. The lid switch fires while the panel is still partly
     /// visible, so this has to be short; see docs/RESEARCH.md on the visibility window.</summary>
     public int CloseDurationMs { get; set; } = 340;
@@ -147,6 +172,18 @@ public sealed class AnimationConfig
         OpenDurationMs = Clamp(OpenDurationMs, 80, 2000);
 
         HingeBias = Clamp(HingeBias, 0.05f, 0.95f);
+
+        HingeClosedAngleDeg = Clamp(HingeClosedAngleDeg, 0f, 170f);
+        HingeOpenAngleDeg = Clamp(HingeOpenAngleDeg, 1f, 180f);
+
+        // An inverted or collapsed angle range would make the mapping meaningless,
+        // so keep at least a degree of travel between the two.
+        if (HingeOpenAngleDeg <= HingeClosedAngleDeg)
+        {
+            HingeOpenAngleDeg = Clamp(HingeClosedAngleDeg + 1f, 1f, 180f);
+        }
+
+        HingeVelocityReference = Clamp(HingeVelocityReference, 0.1f, 50f);
         EdgeExpansion = Clamp(EdgeExpansion, 0f, 0.9f);
         SideDelay = Clamp(SideDelay, 0f, 0.9f);
         PerspectiveStrength = Clamp(PerspectiveStrength, 0f, 3f);
@@ -186,6 +223,10 @@ public sealed class AnimationConfig
     public AnimationConfig Clone() => new()
     {
         EnableAnimation = EnableAnimation,
+        UseHingeAngleWhenAvailable = UseHingeAngleWhenAvailable,
+        HingeClosedAngleDeg = HingeClosedAngleDeg,
+        HingeOpenAngleDeg = HingeOpenAngleDeg,
+        HingeVelocityReference = HingeVelocityReference,
         CloseDurationMs = CloseDurationMs,
         OpenDurationMs = OpenDurationMs,
         HingeBias = HingeBias,

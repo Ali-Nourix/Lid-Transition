@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using LidFlow.App.Capture;
+using LidFlow.App.Lid;
 using LidFlow.App.Interop;
 using LidFlow.App.Monitors;
 using LidFlow.App.Overlay;
@@ -56,6 +57,12 @@ internal sealed class TransitionController : IDisposable
     private bool _frameQueued;
     private bool _disposed;
 
+    // Hinge tracking
+    private readonly HingeAngleMonitor _hinge;
+    private double _hingeProgressRate;
+    private float _lastHingeProgress = float.NaN;
+    private long _lastHingeStamp;
+
     // Diagnostics
     private double _lastFrameMs;
     private int _framesThisTransition;
@@ -69,6 +76,8 @@ internal sealed class TransitionController : IDisposable
         _log = log ?? NullLog.Instance;
 
         _machine = new TransitionStateMachine(config.Animation.EnableAnimation);
+
+        _hinge = new HingeAngleMonitor(_log);
 
         _messageWindow.FrameRequested += (_, _) => OnFrame();
         _messageWindow.Suspending += (_, _) => Fire(TransitionTrigger.Suspending);
@@ -95,7 +104,17 @@ internal sealed class TransitionController : IDisposable
         SoftwareRenderer = _graphics?.IsSoftware ?? false,
         CaptureExcluded = _overlay?.ExcludedFromCapture ?? false,
         DisplayPower = DisplayPower,
+        HingeTracking = IsHingeTracking,
+        HingeAngleDegrees = _hinge.Current?.AngleDegrees,
     };
+
+    /// <summary>
+    /// True when the panel position is being read from the hardware hinge rather
+    /// than played from a timed curve.
+    /// </summary>
+    private bool IsHingeTracking => _config.Animation.UseHingeAngleWhenAvailable
+        && _hinge.IsAvailable
+        && _hinge.Current is not null;
 
     // ------------------------------------------------------------------ startup
 
@@ -106,6 +125,20 @@ internal sealed class TransitionController : IDisposable
     /// </summary>
     public bool Initialize()
     {
+        if (_config.Animation.UseHingeAngleWhenAvailable && _hinge.TryStart())
+        {
+            // Readings arrive on a sensor thread. PostMessage is thread-safe, so
+            // the frame request simply hops to the UI thread, where every graphics
+            // call already lives.
+            _hinge.AngleChanged += (_, _) =>
+            {
+                if (_machine.IsAnimating)
+                {
+                    _messageWindow.RequestFrame();
+                }
+            };
+        }
+
         RefreshDisplays();
 
         if (_activeDisplay is null)
@@ -428,6 +461,10 @@ internal sealed class TransitionController : IDisposable
         _clock.Restart();
         _lastFrameStamp = Stopwatch.GetTimestamp();
 
+        _lastHingeProgress = float.NaN;
+        _lastHingeStamp = 0;
+        _hingeProgressRate = 0d;
+
         // Render and present the first frame BEFORE showing the window. With no
         // redirection surface and content already committed, the first thing that
         // ever appears on screen is a correct frame - there is no empty buffer for
@@ -491,6 +528,31 @@ internal sealed class TransitionController : IDisposable
             return;
         }
 
+        if (IsHingeTracking)
+        {
+            // Hinge-tracking mode has no duration: the transition is over when the
+            // lid actually reaches an endpoint, not when a timer expires.
+            float target = _kind == TransitionKind.Close ? 1f : 0f;
+
+            if (!RenderCurrentFrame())
+            {
+                Fire(TransitionTrigger.Abort);
+                return;
+            }
+
+            if (Math.Abs(_panelProgress - target) <= 0.002f)
+            {
+                CompleteAnimation(jumpToEnd: false);
+                return;
+            }
+
+            // Another frame is requested by the next sensor reading. Keeping a
+            // frame queued as well means a stationary lid still repaints, which is
+            // what lets the blur decay to zero once movement stops.
+            QueueFrame();
+            return;
+        }
+
         if (_clock.Elapsed.TotalMilliseconds >= EffectiveDurationMs())
         {
             CompleteAnimation(jumpToEnd: true);
@@ -525,6 +587,11 @@ internal sealed class TransitionController : IDisposable
             return false;
         }
 
+        if (IsHingeTracking)
+        {
+            return RenderFromHinge();
+        }
+
         double duration = Math.Max(EffectiveDurationMs(), 1d);
         float local = (float)Math.Clamp(_clock.Elapsed.TotalMilliseconds / duration, 0d, 1d);
 
@@ -535,6 +602,60 @@ internal sealed class TransitionController : IDisposable
         LidFrameParameters frame = _model.Evaluate(linearT);
         _panelProgress = frame.Progress;
 
+        return RenderFrame(frame);
+    }
+
+    /// <summary>
+    /// Renders the frame implied by the current hinge angle.
+    /// <para>
+    /// The aperture position comes straight from the hardware and the blur from
+    /// the measured rate of change, so the effect tracks the user's hand instead
+    /// of guessing. Everything else - geometry, falloff, glare - is produced by
+    /// the same animation model the timed path uses, so the two modes cannot look
+    /// like different effects.
+    /// </para>
+    /// </summary>
+    private bool RenderFromHinge()
+    {
+        HingeAngleSample? sample = _hinge.Current;
+        if (sample is null || _model is null)
+        {
+            return false;
+        }
+
+        float progress = LidFlow.Core.Lid.HingeAngleMapping.ProgressFromAngle(
+            sample.Value.AngleDegrees,
+            _config.Animation.HingeClosedAngleDeg,
+            _config.Animation.HingeOpenAngleDeg);
+
+        long now = Stopwatch.GetTimestamp();
+
+        if (!float.IsNaN(_lastHingeProgress) && _lastHingeStamp != 0)
+        {
+            double seconds = (now - _lastHingeStamp) / (double)Stopwatch.Frequency;
+
+            if (seconds > 0.001d)
+            {
+                double instantaneous = (progress - _lastHingeProgress) / seconds;
+
+                // One-pole smoothing. Raw frame-to-frame differences of a sensor
+                // reading are noisy enough to make the blur flicker; this keeps the
+                // response quick while removing the jitter.
+                const double Alpha = 0.35d;
+                _hingeProgressRate = (Alpha * instantaneous) + ((1d - Alpha) * _hingeProgressRate);
+            }
+        }
+
+        _lastHingeProgress = progress;
+        _lastHingeStamp = now;
+
+        float velocity = LidFlow.Core.Lid.HingeAngleMapping.NormalizeVelocity(
+            _hingeProgressRate,
+            _config.Animation.HingeVelocityReference);
+
+        _panelProgress = progress;
+
+        LidFrameParameters frame = _model.EvaluateAtProgress(progress, velocity);
         return RenderFrame(frame);
     }
 
@@ -635,6 +756,7 @@ internal sealed class TransitionController : IDisposable
         }
 
         _disposed = true;
+        _hinge.Dispose();
         ReleaseGraphics();
     }
 }
@@ -665,4 +787,10 @@ internal readonly struct DiagnosticsSnapshot
     public bool CaptureExcluded { get; init; }
 
     public DisplayPowerState DisplayPower { get; init; }
+
+    /// <summary>Whether the panel position is read from the hardware hinge.</summary>
+    public bool HingeTracking { get; init; }
+
+    /// <summary>Current hinge angle, when a sensor is present.</summary>
+    public double? HingeAngleDegrees { get; init; }
 }
